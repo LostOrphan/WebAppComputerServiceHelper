@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 import phonenumber_field
+from datetime import timedelta
 load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,15 +41,20 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',
     'accounts',
     'clients',
     'service',
     'inventory',
     "phonenumber_field",
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'corsheaders',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -143,3 +149,39 @@ AUTH_USER_MODEL = 'accounts.CustomUser'
 # Ustawienia numerow telefonu
 PHONENUMBER_DEFAULT_REGION = "PL"
 PHONENUMBER_DB_FORMAT = "E164"
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),     # Czas ważności tokena dostępu
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),        # Czas ważności tokena odświeżania
+    'ROTATE_REFRESH_TOKENS': True,                      # Generuj nowy Refresh Token przy odświeżaniu
+    'BLACKLIST_AFTER_ROTATION': True,                   # Unieważniaj stary Refresh Token po użyciu
+    'UPDATE_LAST_LOGIN': True,                          # Aktualizuj pole last_login w modelu użytkownika
+
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),                    # Nagłówek: Authorization: Bearer <token>
+}
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',      # Lokalny serwer Vite / 
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Serwis komputerowy API',
+    'DESCRIPTION': 'API systemu wspomagania serwisu komputerowego',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+}

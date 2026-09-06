@@ -15,12 +15,12 @@ from .serializers import (
 
 User = get_user_model()
 
-class CityViewSet(viewsets.ModelViewSet):
+class CityView(viewsets.ModelViewSet):
     queryset = City.objects.all().order_by('name')
     serializer_class = CitySerializer
     permission_classes = [permissions.IsAuthenticated]
 
-class LocationViewSet(viewsets.ModelViewSet):
+class LocationView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
@@ -35,17 +35,20 @@ class LocationViewSet(viewsets.ModelViewSet):
             return LocationReadSerializer
         return LocationWriteSerializer
 
-class UserViewSet(viewsets.ModelViewSet):
+class UserView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return User.objects.none()
+
         user = self.request.user
         # Właściciel widzi wszystkich pracowników
         if getattr(user,'role',None) == 'OWNER':
             return User.objects.all().select_related('location')
         # Kierownik i pracownik widzi tylko pracowników swojego oddziału
         if user.location:
-            return User.objects.filter(localtion=user.location).select_related('location')
+            return User.objects.filter(location=user.location).select_related('location')
         # Brak przydzielonej lokacji -> widok tylko siebie
         return User.objects.filter(id=user.id)
 
@@ -64,5 +67,5 @@ class UserViewSet(viewsets.ModelViewSet):
         if request.method == 'PATCH':
             serializer = UserMeSerializer(user,data=request.data,partial=True)
             serializer.is_valid(raise_exception=True)
-            serializer.save
+            serializer.save()
             return Response(serializer.data)

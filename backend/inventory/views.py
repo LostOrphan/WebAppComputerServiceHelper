@@ -3,32 +3,30 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import PartCategory, Part, Stock
-from .serializers import (
-    PartCategorySerializer,
-    PartSerializer,
-    StockReadSerializer,
-    StockWriteSerializer,
-)
+from .serializers import PartCategorySerializer,PartSerializer,StockReadSerializer,StockWriteSerializer
 
-class PartCategoryViewSet(viewsets.ModelViewSet):
+class PartCategoryView(viewsets.ModelViewSet):
     queryset = PartCategory.objects.all().order_by('name')
     serializer_class = PartCategorySerializer
     permission_classes = [permissions.IsAuthenticated]
 
-class PartViewSet(viewsets.ModelViewSet):
+class PartView(viewsets.ModelViewSet):
     queryset = Part.objects.all().select_related('category').order_by('name')
     serializer_class = PartSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name','code','category__name']
+    search_fields = ['name','sku','category__name']
 
-class StockViewSet(viewsets.ModelViewSet):
+class StockView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['part__name','part__code']
+    search_fields = ['part__name','part__sku']
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Stock.objects.none()
+
         user = self.request.user
         queryset = Stock.objects.all().select_related('part','part__category','location','location__city')
         if getattr(user,'role',None) == 'OWNER':

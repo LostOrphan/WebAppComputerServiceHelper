@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from .models import Client
 from .serializers import ClientSerializer, ClientMinimalSerializer
 
-class ClientViewSet(viewsets.ModelViewSet):
+class ClientView(viewsets.ModelViewSet):
     queryset = Client.objects.all().order_by('-created_at')
     permission_classes = [permissions.IsAuthenticated]
 

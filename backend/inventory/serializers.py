@@ -8,20 +8,26 @@ class PartCategorySerializer(serializers.ModelSerializer):
         fields = ['id','name']
 
 class PartSerializer(serializers.ModelSerializer):
-    """Katalog części (dane ogólne)"""
     category_name = serializers.CharField(source='category.name',read_only=True)
 
     class Meta:
         model = Part
-        fields = ['id','name','code','category','category_name','default_price','description']
+        fields = [
+            'id', 'name', 'sku', 'category', 'category_name',
+            'buy_price_net', 'sell_price_gross', 'unit'
+        ]
 
-    def validate_default_price(self,value):
+    def validate_buy_price_net(self,value):
+        if value<0:
+            raise serializers.ValidationError("Wartość nie może być ujemna")
+        return value
+
+    def validate_sell_price_gross(self,value):
         if value<0:
             raise serializers.ValidationError("Wartość nie może być ujemna")
         return value
 
 class StockReadSerializer(serializers.ModelSerializer):
-    """Podgląd części magazynowych (GET)"""
     part = PartSerializer(read_only=True)
     location = LocationReadSerializer(read_only=True)
     is_low_stock = serializers.ReadOnlyField()
@@ -31,7 +37,6 @@ class StockReadSerializer(serializers.ModelSerializer):
         fields = ['id','part','location','quantity','min_quantity','is_low_stock']
 
 class StockWriteSerializer(serializers.ModelSerializer):
-    """Aktualizacja i dodawanie stanów magazynowych (POST,PUT,PATCH)"""
     class Meta:
         model = Stock
         fields = ['id','part','location','quantity','min_quantity']

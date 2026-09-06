@@ -40,22 +40,18 @@ class Ticket(models.Model):
         is_new = self.pk is None
         status_changed = False
 
-        # Generowanie unikalnego kodu zgłoszenia
         if not self.ticket_code:
-            self.ticket_code = f"TCK-{uuid.uuid4().hex[:6].upper()}"  # Dopisano wywołanie () przy .upper()
+            self.ticket_code = f"TCK-{uuid.uuid4().hex[:6].upper()}"
 
-        # Wykrycie zmiany statusu dla istniejącego obiektu
         if not is_new:
             old_status = Ticket.objects.get(pk=self.pk).status
             if old_status != self.status:
                 status_changed = True
         else:
-            status_changed = True  # Zapisujemy pierwszy status po utworzeniu zgłoszenia
+            status_changed = True 
 
-        # Fizyczny zapis obiektu Ticket w bazie
         super().save(*args, **kwargs)
 
-        # Tworzenie wpisu w historii jeśli status uległ zmianie lub zgłoszenie jest nowe
         if status_changed:
             TicketStatusHistory.objects.create(
                 ticket=self,
@@ -69,7 +65,6 @@ class Ticket(models.Model):
 
 
 class TicketStatusHistory(models.Model):
-    """Śledzenie historii zmian statusu wraz ze znacznikiem czasu i operatorem."""
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='status_history')
     status = models.CharField(max_length=20, choices=Ticket.Status.choices)
     changed_at = models.DateTimeField(auto_now_add=True)
@@ -88,7 +83,6 @@ class TicketStatusHistory(models.Model):
 
 
 class TicketPart(models.Model):
-    """Części wykorzystywane w danej naprawie."""
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='used_parts')
     part = models.ForeignKey('inventory.Part', on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)

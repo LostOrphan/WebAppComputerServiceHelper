@@ -1,14 +1,19 @@
 from rest_framework import viewsets, permissions, filters, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db import transaction
-
+from rest_framework.generics import GenericAPIView
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema
 from .models import Ticket, TicketPart
+from .serializers import TicketStatusHistorySerializer
+from django.db import transaction
 from .serializers import (
     TicketReadSerializer,
     TicketWriteSerializer,
     TicketPartReadSerializer,
     TicketPartWriteSerializer,
+    PublicTicketStatusSerializer,
 )
 from inventory.models import Stock
 
@@ -19,8 +24,11 @@ class TicketViewSet(viewsets.ModelViewSet):
     ordering_fields = ['created_at','updated_at','status']
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Ticket.objects.none()
+
         user = self.request.user
-        queryset = Ticket.objects.select_related('client','location','assigned_worker').prefetch_related('status_history','user_parts__part')
+        queryset = Ticket.objects.select_related('client','location','assigned_worker').prefetch_related('status_history','used_parts__part')
         # Właściciel widzi wszystkie zgłoszenia
         if getattr(user,'role',None) == 'OWNER':
             return queryset
@@ -39,23 +47,24 @@ class TicketViewSet(viewsets.ModelViewSet):
         comment = serializer.validated_data.pop('comment','')
         serializer.save(user=self.request.user, comment=comment)
 
-        @action(detail=True,methods=['post'],url_path='change-status')
-        def change_status(self,request,pk=None):
-            ticket = self.get_object()
-            new_status = request.data.get('status')
-            comment = request.data.get('comment','')
-
-            if not new_status or new_status not in Ticket.Status.values:
-                return Response({"detail": "Wybrany status jest nieprawidłowy"},status=status.HTTP_400_BAD_REQUEST)
-            ticket.status = new_status
-            ticket.save(user=request.user, comment=comment)
-
-            return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+    @action(detail=True,methods=['post'],url_path='change-status')
+    def change_status(self,request,pk=None):
+        ticket = self.get_object()
+        new_status = request.data.get('status')
+        comment = request.data.get('comment','')
+        if not new_status or new_status not in Ticket.Status.values:
+            return Response({"detail": "Wybrany status jest nieprawidłowy"},status=status.HTTP_400_BAD_REQUEST)
+        ticket.status = new_status
+        ticket.save(user=request.user, comment=comment)
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
 class TicketPartViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return TicketPart.objects.none()
+
         user = self.request.user
         queryset = TicketPart.objects.select_related('ticket','part')
 
@@ -67,17 +76,53 @@ class TicketPartViewSet(viewsets.ModelViewSet):
 
     def get_serializer_class(self):
         if self.action in ['list','retrieve']:
-            return TicketReadSerializer
-        return TicketWriteSerializer
+            return TicketPartReadSerializer
+        return TicketPartWriteSerializer
 
     @transaction.atomic
     def perform_create(self, serializer):
         ticket_part = serializer.save()
 
-        stock = Stock.objects.select_for_update().filter(location=ticket_part.ticket.location,part=ticket_part.part).firt()
+        stock = Stock.objects.select_for_update().filter(location=ticket_part.ticket.location,part=ticket_part.part).first()
 
         if not stock or stock.quantity <ticket_part.quantity:
             raise serializers.ValidationError({"quantity":"Brak wystarczającej liczby części w magazynie oddziału."})
 
         stock.quantity -= ticket_part.quantity
         stock.save()
+class PublicTicketStatusView(GenericAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = PublicTicketStatusSerializer
+
+    @extend_schema(responses=PublicTicketStatusSerializer)
+    def post(self, request):
+        ticket_code = request.data.get('ticket_code')
+        phone_number = request.data.get('phone_number')
+
+        if not ticket_code or not phone_number:
+            return Response(
+                {"detail": "Podaj kod zgłoszenia oraz numer telefonu."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ticket = Ticket.objects.filter(
+            ticket_code=ticket_code,
+            client__phone_number=phone_number
+        ).select_related('location').prefetch_related('status_history').first()
+
+        if not ticket:
+            return Response(
+                {"detail": "Nie znaleziono zgłoszenia o podanych danych."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response({
+            "ticket_code": ticket.ticket_code,
+            "device_name": ticket.device_name,
+            "status": ticket.get_status_display(),
+            "location_name": ticket.location.name,
+            "estimated_cost": ticket.estimated_cost,
+            "final_cost": ticket.final_cost,
+            "updated_at": ticket.updated_at,
+            "history": TicketStatusHistorySerializer(ticket.status_history.all(), many=True).data
+        })
