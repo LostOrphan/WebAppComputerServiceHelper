@@ -1,9 +1,10 @@
 from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db.models import Q
 
 from .models import PartCategory, Part, Stock
-from .serializers import PartCategorySerializer,PartSerializer,StockReadSerializer,StockWriteSerializer
+from .serializers import PartCategorySerializer, PartSerializer, StockReadSerializer, StockWriteSerializer
 
 class PartCategoryView(viewsets.ModelViewSet):
     queryset = PartCategory.objects.all().order_by('name')
@@ -16,36 +17,106 @@ class PartView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name','sku','category__name']
+    # Dodane nowe pola do silnika wyszukiwania (w tym kod ze skanera)
+    search_fields = ['name', 'sku', 'ean', 'brand', 'category__name']
+    
+    def perform_create(self, serializer):
+        part = serializer.save()
+
+        # Nadal inicjujemy zerowy stan po stworzeniu nowej części
+        if self.request.user.location:
+            Stock.objects.create(
+                part=part,
+                location=self.request.user.location,
+                quantity=0,
+                min_quantity=2,
+            )
 
 class StockView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['part__name','part__sku']
+    # Dodano wyszukiwanie zasobów magazynowych bezpośrednio po EAN
+    search_fields = ['part__name', 'part__sku', 'part__ean']
 
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return Stock.objects.none()
 
         user = self.request.user
-        queryset = Stock.objects.all().select_related('part','part__category','location','location__city')
-        if getattr(user,'role',None) == 'OWNER':
-            return queryset
+        queryset = Stock.objects.all().select_related('part', 'part__category', 'location', 'location__city')
+        if getattr(user, 'role', None) == 'OWNER':
+            visible_queryset = queryset
+        elif user.location:
+            visible_queryset = queryset.filter(location=user.location)
+        else:
+            return Stock.objects.none()
 
-        if user.location:
-            return queryset.filter(location=user.location)
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            visible_queryset = visible_queryset.filter(part__category_id=category_id)
 
-        return Stock.objects.none()
+        return visible_queryset
 
     def get_serializer_class(self):
-        if self.action in ['list','retrieve']:
+        if self.action in ['list', 'retrieve']:
             return StockReadSerializer
         return StockWriteSerializer
 
-    @action(detail=False,methods=['get'],url_path='low-stock')
-    def low_stock(self,request):
+    @action(detail=False, methods=['get'], url_path='low-stock')
+    def low_stock(self, request):
         queryset = self.get_queryset()
         low_stock_items = [stock for stock in queryset if stock.is_low_stock]
         serializer = StockReadSerializer(low_stock_items, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
+
+    # --- NOWY ENDPOINT DO SZYBKIEGO PRZYJMOWANIA TOWARU ---
+    @action(detail=False, methods=['post'], url_path='receive-goods')
+    def receive_goods(self, request):
+        """
+        Przyjmuje ładunek: {"identifier": "EAN / SKU / ID", "quantity": 1}
+        """
+        identifier = request.data.get('identifier')
+        quantity = int(request.data.get('quantity', 1))
+        user_location = request.user.location
+
+        if not user_location:
+            return Response(
+                {"detail": "Brak przypisanego oddziału. Zaloguj się jako pracownik oddziału."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not identifier:
+            return Response(
+                {"detail": "Brak identyfikatora części (SKU, EAN lub ID)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Szukamy produktu - Q pozwala na wyszukiwanie po jednym z kilku warunków (OR)
+        # Jeśli identifier składa się z samych cyfr i jest krótki, sprawdzamy też ID
+        lookup = Q(sku=identifier) | Q(ean=identifier)
+        if str(identifier).isdigit() and len(str(identifier)) < 8:
+            lookup |= Q(id=identifier)
+
+        part = Part.objects.filter(lookup).first()
+
+        if not part:
+            return Response(
+                {"detail": "Produkt nie istnieje. Otwórz formularz nowej części.", "code": "NOT_FOUND"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Produkt istnieje! Zwiększamy jego ilość.
+        stock, created = Stock.objects.get_or_create(
+            part=part,
+            location=user_location,
+            defaults={'quantity': 0, 'min_quantity': 2}
+        )
+        
+        stock.add_quantity(quantity)
+
+        return Response({
+            "message": "Pomyślnie dodano sztuki do magazynu.",
+            "part_name": part.name,
+            "part_sku": part.sku,
+            "new_quantity": stock.quantity
+        }, status=status.HTTP_200_OK)

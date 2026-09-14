@@ -10,7 +10,7 @@ class ClientView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    seraching_fields = ['first_name','last_name','phone_number','email']
+    search_fields = ['first_name','last_name','phone_number','email']
     ordering_fields = ['created_at','last_name']
 
     def get_serializer_class(self):
