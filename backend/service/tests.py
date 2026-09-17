@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from accounts.models import City, Location
+from accounts.models import City, Location, Voivodeship
 from clients.models import Client
 from inventory.models import PartCategory, Part, Stock
 from .models import Ticket, TicketPart, TicketStatusHistory
@@ -15,13 +15,22 @@ User = get_user_model()
 
 class ServiceTests(APITestCase):
 	def setUp(self):
-		city = City.objects.create(name='Gdansk')
+		voivodeship = Voivodeship.objects.create(code='PM', name='Pomorskie')
+		city = City.objects.create(name='Gdansk', voivodeship=voivodeship)
 		self.location = Location.objects.create(
 			name='Centrum', address='Dluga 1', postal_code='80-001', city=city
+		)
+		self.inactive_location = Location.objects.create(
+			name='Nieaktywna', address='Krotka 2', postal_code='80-002', city=city,
+			is_active=False,
 		)
 		self.user = User.objects.create_user(
 			username='technician', password='password',
 			role=User.Role.TECHNICIAN, location=self.location,
+		)
+		self.inactive_user = User.objects.create_user(
+			username='inactive-technician', password='password',
+			role=User.Role.TECHNICIAN, location=self.inactive_location,
 		)
 		self.client_record = Client.objects.create(
 			first_name='Jan', last_name='Kowalski', phone_number='+48500100200'
@@ -29,7 +38,7 @@ class ServiceTests(APITestCase):
 		category = PartCategory.objects.create(name='Laptopy')
 		self.part = Part.objects.create(
 			name='Dysk SSD', sku='SSD-001', category=category,
-			buy_price_net=Decimal('100.00'), sell_price_gross=Decimal('150.00'),
+			default_buy_price_net=Decimal('100.00'), sell_price_gross=Decimal('150.00'),
 		)
 
 	def create_ticket(self):
@@ -62,6 +71,52 @@ class ServiceTests(APITestCase):
 		history = ticket.status_history.order_by('-changed_at').first()
 		self.assertEqual(history.status, Ticket.Status.DIAGNOSIS)
 		self.assertEqual(history.comment, 'Rozpoczeto diagnoze')
+
+	def test_claim_assigns_worker_and_starts_diagnosis(self):
+		ticket = Ticket.objects.create(
+			client=self.client_record,
+			location=self.location,
+			device_name='Laptop',
+			problem_description='Nie uruchamia sie',
+		)
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/claim/',
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		ticket.refresh_from_db()
+		self.assertEqual(ticket.assigned_worker, self.user)
+		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
+
+	def test_invalid_status_transition_is_rejected(self):
+		ticket = self.create_ticket()
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/change-status/',
+			{'status': Ticket.Status.CLOSED},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 409)
+
+	def test_inactive_location_user_cannot_change_ticket_status(self):
+		ticket = self.create_ticket()
+		ticket.location = self.inactive_location
+		ticket.assigned_worker = self.inactive_user
+		ticket.save(update_fields=['location', 'assigned_worker'])
+		self.client.force_authenticate(self.inactive_user)
+
+		response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/change-status/',
+			{'status': Ticket.Status.DIAGNOSIS},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 403)
 
 	def test_public_status_requires_matching_phone_number(self):
 		ticket = self.create_ticket()

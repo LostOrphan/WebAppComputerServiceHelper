@@ -4,15 +4,18 @@ import { useAuth } from '../../context/AuthContext';
 
 export const PrivateLayout: React.FC = () => {
   const { user, logout } = useAuth();
-
+  if (!user) return null;
   return (
     <div className="min-h-screen flex bg-gray-100">
-      <aside className="w-64 bg-slate-800 text-white flex flex-col justify-between">
+      <aside className="sticky top-0 h-screen w-64 shrink-0 bg-slate-800 text-white flex flex-col justify-between">
         <div>
           <div className="p-4 text-lg font-bold border-b border-slate-700">Panel Pracownika</div>
           <nav className="p-4 space-y-2">
             <Link to="/work/dashboard" className="block px-4 py-2 rounded hover:bg-slate-700 transition">Dashboard</Link>
             <Link className="block px-4 py-2 rounded hover:bg-slate-700 transition" to="/work/inventory">Magazyn</Link>
+            <Link className="block px-4 py-2 rounded hover:bg-slate-700 transition" to="/work/service">Serwis</Link>
+            {user.role === 'OWNER' && (<Link to="/work/admin/company" className="block px-4 py-2 rounded hover:bg-slate-700 transition">Zarządzaj firmą</Link>)}
+            {(user.role === 'MANAGER') && (<Link to="/work/admin/branch" className="block px-4 py-2 rounded hover:bg-slate-700 transition">Zarządzaj oddziałem</Link>)}
           </nav>
         </div>
         <div className="p-4 border-t border-slate-700">
@@ -26,7 +29,7 @@ export const PrivateLayout: React.FC = () => {
         </div>
       </aside>
 
-      <main className="flex-grow p-8">
+      <main className="grow p-8">
         <Outlet />
       </main>
     </div>

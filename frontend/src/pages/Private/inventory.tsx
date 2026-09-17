@@ -69,7 +69,7 @@ export const Inventory: React.FC = () => {
         <h1 className="text-2xl font-bold text-slate-800 mb-4 md:mb-0">Magazyn (Części)</h1>
         
         <div className="flex w-full md:w-auto space-x-4 flex-wrap gap-y-2 md:gap-y-0">
-          <form onSubmit={(e) => e.preventDefault()} className="flex flex-grow">
+          <form onSubmit={(e) => e.preventDefault()} className="flex grow">
             <input
               type="text"
               placeholder="Szukaj (nazwa, SKU, EAN)..."
@@ -143,7 +143,8 @@ export const Inventory: React.FC = () => {
               </thead>
               <tbody className="divide-y">
                 {stocks.map((stock) => {
-                  const isLow = stock.is_low_stock || stock.quantity <= stock.min_quantity;
+                  const hasMinimum = stock.min_quantity > 0;
+                  const isLow = hasMinimum && stock.is_low_stock;
 
                   return (
                     <tr 
@@ -181,7 +182,11 @@ export const Inventory: React.FC = () => {
                         </button>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-center">
-                        {isLow ? (
+                        {!hasMinimum ? (
+                          <span className={stock.quantity > 0 ? 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200' : 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200'}>
+                            {stock.quantity > 0 ? 'W magazynie' : 'Brak w magazynie'}
+                          </span>
+                        ) : isLow ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
                             Niski stan
                           </span>
@@ -244,7 +249,7 @@ export const Inventory: React.FC = () => {
                 {Object.entries(selectedSpecifications).map(([name, value]) => (
                   <div key={name} className="grid grid-cols-2 gap-4 py-3 text-sm">
                     <dt className="font-medium text-slate-600">{name}</dt>
-                    <dd className="break-words text-slate-800">
+                    <dd className="wrap-break-words text-slate-800">
                       {typeof value === 'object' ? JSON.stringify(value) : String(value)}
                     </dd>
                   </div>

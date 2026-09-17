@@ -68,7 +68,7 @@ class Stock(models.Model):
 
     @property
     def is_low_stock(self) -> bool:
-        return self.quantity <= self.min_quantity
+        return self.min_quantity > 0 and self.quantity <= self.min_quantity
 
     def add_quantity(self, amount: int):
         """Pomocnicza metoda do bezpiecznego zwiększania stanu"""

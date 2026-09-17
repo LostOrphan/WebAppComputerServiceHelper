@@ -36,6 +36,19 @@ class Ticket(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    ALLOWED_STATUS_TRANSITIONS = {
+        Status.NEW: {Status.DIAGNOSIS, Status.REJECTED},
+        Status.DIAGNOSIS: {Status.IN_PROGRESS, Status.WAITING_FOR_PARTS, Status.REJECTED},
+        Status.WAITING_FOR_PARTS: {Status.IN_PROGRESS, Status.REJECTED},
+        Status.IN_PROGRESS: {Status.READY, Status.WAITING_FOR_PARTS, Status.REJECTED},
+        Status.READY: {Status.CLOSED},
+        Status.CLOSED: set(),
+        Status.REJECTED: set(),
+    }
+
+    def can_transition_to(self, new_status):
+        return new_status == self.status or new_status in self.ALLOWED_STATUS_TRANSITIONS[self.status]
+
     def save(self, *args, user=None, comment="", **kwargs):
         is_new = self.pk is None
         status_changed = False

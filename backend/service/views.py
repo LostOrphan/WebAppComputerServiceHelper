@@ -16,9 +16,10 @@ from .serializers import (
     PublicTicketStatusSerializer,
 )
 from inventory.models import Stock
+from accounts.permissions import HasActiveLocation
 
 class TicketViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     filter_backends = [filters.SearchFilter,filters.OrderingFilter]
     search_fields = ['ticket_code','device_name','serial_number','client__first_name','client__last_name','client__phone_number']
     ordering_fields = ['created_at','updated_at','status']
@@ -50,16 +51,44 @@ class TicketViewSet(viewsets.ModelViewSet):
     @action(detail=True,methods=['post'],url_path='change-status')
     def change_status(self,request,pk=None):
         ticket = self.get_object()
+        if request.user.role == 'TECHNICIAN' and ticket.assigned_worker_id != request.user.id:
+            return Response({"detail": "Tylko przypisany pracownik może zmienić status."}, status=status.HTTP_403_FORBIDDEN)
         new_status = request.data.get('status')
         comment = request.data.get('comment','')
         if not new_status or new_status not in Ticket.Status.values:
             return Response({"detail": "Wybrany status jest nieprawidłowy"},status=status.HTTP_400_BAD_REQUEST)
+        if not ticket.can_transition_to(new_status):
+            return Response(
+                {"detail": "Nie można wykonać tej zmiany statusu."},
+                status=status.HTTP_409_CONFLICT,
+            )
         ticket.status = new_status
         ticket.save(user=request.user, comment=comment)
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def claim(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+
+        if ticket.assigned_worker_id:
+            return Response(
+                {"detail": "To zgłoszenie jest już przypisane do pracownika."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if ticket.status != Ticket.Status.NEW:
+            return Response(
+                {"detail": "Można przyjąć tylko nowe zgłoszenie."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        ticket.assigned_worker = request.user
+        ticket.status = Ticket.Status.DIAGNOSIS
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Pracownik przyjął zgłoszenie'))
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
 class TicketPartViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
 
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
@@ -81,6 +110,9 @@ class TicketPartViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
+        ticket = serializer.validated_data['ticket']
+        if self.request.user.role != 'OWNER' and ticket.location_id != self.request.user.location_id:
+            raise permissions.PermissionDenied('Nie możesz dodać części do zgłoszenia z innej lokalizacji.')
         ticket_part = serializer.save()
 
         stock = Stock.objects.select_for_update().filter(location=ticket_part.ticket.location,part=ticket_part.part).first()

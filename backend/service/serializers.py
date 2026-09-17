@@ -80,6 +80,21 @@ class TicketWriteSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        location = attrs.get('location', self.instance.location if self.instance else None)
+        if user and getattr(user, 'role', None) != 'OWNER' and location != user.location:
+            raise serializers.ValidationError({'location': 'Zgłoszenie musi należeć do aktywnej lokalizacji pracownika.'})
+
+        assigned_worker = attrs.get('assigned_worker')
+        if assigned_worker and assigned_worker.role not in ['MANAGER', 'TECHNICIAN']:
+            raise serializers.ValidationError({'assigned_worker': 'Do zgłoszenia można przypisać tylko pracownika serwisu.'})
+        if assigned_worker and assigned_worker.location_id != location.id:
+            raise serializers.ValidationError({'assigned_worker': 'Pracownik musi należeć do lokalizacji zgłoszenia.'})
+
+        if self.instance and 'status' in attrs and not self.instance.can_transition_to(attrs['status']):
+            raise serializers.ValidationError({'status': 'Nie można wykonać tej zmiany statusu.'})
+
         parts_cost = 0
         final_cost = attrs.get('final_cost')
         if final_cost is not None and self.instance:

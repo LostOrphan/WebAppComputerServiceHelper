@@ -2,21 +2,37 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from phonenumber_field.modelfields import PhoneNumberField
 
-class City(models.Model):
-    name = models.CharField(max_length=100,unique=True)
-
+class Voivodeship(models.Model):
+    code = models.CharField(max_length=2, unique=True)
+    name = models.CharField(max_length=100)
     class Meta:
-        verbose_name_plural = "Cities"
+        verbose_name_plural = "Voivodeships"
         ordering = ['name']
     def __str__(self):
         return self.name
-
+#imported from SIMC
+class City(models.Model):
+    name = models.CharField(max_length=150)
+    simc_code = models.CharField(max_length=7, unique=True)
+    simc_parent_code = models.CharField(max_length=7, blank=True)
+    locality_type = models.CharField(max_length=3)
+    voivodeship = models.ForeignKey(Voivodeship, on_delete=models.PROTECT)
+    county_code = models.CharField(max_length=3)
+    municipality_code = models.CharField(max_length=3)
+    municipality_type = models.CharField(max_length=1)
+    class Meta:
+        verbose_name_plural = "Cities"
+        ordering = ['name', 'voivodeship__name']
+    def __str__(self):
+        return self.name
+    
 class Location(models.Model):
     name = models.CharField(max_length=100)
     address = models.CharField(max_length=255)
     postal_code = models.CharField(max_length=10)
     city = models.ForeignKey(City, on_delete=models.PROTECT, related_name='locations')
     phone_number = PhoneNumberField(blank=True)
+    email = models.EmailField(blank=True)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):

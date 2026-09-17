@@ -7,19 +7,27 @@ User = get_user_model()
 class CitySerializer(serializers.ModelSerializer):
     class Meta:
         model = City
-        fields = ['id','name']
+        fields = [
+            'id',
+            'name',
+            'simc_code',
+            'locality_type',
+            'voivodeship',
+            'county_code',
+            'municipality_code',
+        ]
 
 class LocationReadSerializer(serializers.ModelSerializer):
     city = CitySerializer(read_only=True)
 
     class Meta:
         model = Location
-        fields = ['id','name','address','postal_code','city','phone_number','is_active']
+        fields = ['id','name','address','postal_code','city','phone_number','email','is_active']
 
 class LocationWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
-        fields = ['id','name','address','postal_code','city','phone_number','is_active']
+        fields = ['id','name','address','postal_code','city','phone_number','email','is_active']
 
 class UserReadSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display',read_only=True)
@@ -39,6 +47,27 @@ class UserWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id','username','password','first_name','last_name','role','location','is_active']
+    def validate(self,attrs):
+        request = self.context.get('request')
+        location = attrs.get('location')
+
+        if location and not location.is_active:
+            raise serializers.ValidationError({
+                'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'
+            })
+
+        if request and request.user:
+            current_user = request.user
+            if current_user.role == 'MANAGER':
+                if attrs.get('role') == 'OWNER':
+                    raise serializers.ValidationError({"role":"Nie masz uprawnień do wykonania tej operacji."})
+                attrs['location'] = current_user.location
+
+                if current_user.location and not current_user.location.is_active:
+                    raise serializers.ValidationError({
+                        'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'
+                    })
+        return super().validate(attrs)
 
     def create(self,validated_data):
         password = validated_data.pop('password',None)
