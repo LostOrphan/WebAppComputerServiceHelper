@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
-
+from django.db.models import Q
 
 class Ticket(models.Model):
     class Status(models.TextChoices):
@@ -100,3 +100,39 @@ class TicketPart(models.Model):
     part = models.ForeignKey('inventory.Part', on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
     price_at_use = models.DecimalField(max_digits=8, decimal_places=2)
+
+class TicketAssignmentHistory(models.Model):
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="assignment_history",
+    )
+    worker = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ticket_assignment_history",
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+# class TicketWorkSession(models.Model):
+#     ticket = models.ForeignKey(
+#         Ticket,
+#         on_delete=models.CASCADE,
+#         related_name="work_sessions",
+#     )
+#     worker = models.ForeignKey(
+#         settings.AUTH_USER_MODEL,
+#         on_delete=models.PROTECT,
+#         related_name="ticket_work_sessions",
+#     )
+#     started_at = models.DateTimeField(auto_now_add=True)
+#     ended_at = models.DateTimeField(null=True, blank=True)
+#     last_seen_at = models.DateTimeField(auto_now=True)
+#     class Meta:
+#         constraints = [
+#             models.UniqueConstraint(
+#                 fields=["ticket"],
+#                 condition=Q(ended_at__isnull=True),
+#                 name="one_active_work_session_per_ticket",
+#             )
+#         ]
