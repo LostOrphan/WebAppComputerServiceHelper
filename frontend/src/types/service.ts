@@ -57,6 +57,7 @@ export interface ClientOption {
   first_name: string;
   last_name: string;
   phone_number: string | null;
+  email?: string | null;
 }
 
 export interface PartOption {

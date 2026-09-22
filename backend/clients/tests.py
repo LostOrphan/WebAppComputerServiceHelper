@@ -54,7 +54,7 @@ class ClientApiTests(APITestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(
 			set(response.data[0]),
-			{'id', 'first_name', 'last_name', 'phone_number'},
+			{'id', 'first_name', 'last_name', 'phone_number', 'email'},
 		)
 
 	def test_anonymize_endpoint_updates_client(self):

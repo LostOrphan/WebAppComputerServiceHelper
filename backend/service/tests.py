@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 from accounts.models import City, Location, Voivodeship
 from clients.models import Client
 from inventory.models import PartCategory, Part, Stock
-from .models import Ticket, TicketPart, TicketStatusHistory
+from .models import Ticket, TicketAssignmentHistory, TicketPart, TicketStatusHistory
 from .serializers import TicketWriteSerializer
 
 
@@ -57,6 +57,24 @@ class ServiceTests(APITestCase):
 		history = ticket.status_history.get()
 		self.assertEqual(history.status, Ticket.Status.NEW)
 
+	def test_ticket_create_endpoint_saves_audit_metadata(self):
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post('/api/service/tickets/', {
+			'client': self.client_record.pk,
+			'location': self.location.pk,
+			'device_name': 'Telefon',
+			'problem_description': 'Uszkodzony ekran',
+			'comment': 'Przyjęto nowe zgłoszenie',
+		}, format='json')
+
+		self.assertEqual(response.status_code, 201)
+		self.assertRegex(response.data['ticket_code'], r'^TCK-[A-F0-9]{6}$')
+		ticket = Ticket.objects.get(pk=response.data['id'])
+		history = ticket.status_history.get()
+		self.assertEqual(history.changed_by, self.user)
+		self.assertEqual(history.comment, 'Przyjęto nowe zgłoszenie')
+
 	def test_status_endpoint_creates_history_with_comment(self):
 		ticket = self.create_ticket()
 		self.client.force_authenticate(self.user)
@@ -90,6 +108,29 @@ class ServiceTests(APITestCase):
 		ticket.refresh_from_db()
 		self.assertEqual(ticket.assigned_worker, self.user)
 		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
+		assignment = TicketAssignmentHistory.objects.get(ticket=ticket)
+		self.assertEqual(assignment.worker, self.user)
+
+	def test_generic_update_cannot_change_status_or_assignment(self):
+		ticket = self.create_ticket()
+
+		serializer = TicketWriteSerializer(
+			ticket,
+			data={'status': Ticket.Status.IN_PROGRESS},
+			partial=True,
+		)
+
+		self.assertFalse(serializer.is_valid())
+		self.assertIn('status', serializer.errors)
+
+		serializer = TicketWriteSerializer(
+			ticket,
+			data={'assigned_worker': None},
+			partial=True,
+		)
+
+		self.assertFalse(serializer.is_valid())
+		self.assertIn('assigned_worker', serializer.errors)
 
 	def test_invalid_status_transition_is_rejected(self):
 		ticket = self.create_ticket()

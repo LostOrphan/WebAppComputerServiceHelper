@@ -29,18 +29,48 @@ class TicketViewSet(viewsets.ModelViewSet):
             return Ticket.objects.none()
 
         user = self.request.user
-        queryset = Ticket.objects.select_related('client','location','assigned_worker').prefetch_related('status_history','used_parts__part')
+        queryset = Ticket.objects.select_related('client','location','assigned_worker').prefetch_related(
+            'status_history', 'assignment_history', 'used_parts__part'
+        )
         # Właściciel widzi wszystkie zgłoszenia
         if getattr(user,'role',None) == 'OWNER':
-            return queryset
-        if user.location:
-            return queryset.filter(location=user.location)
-        return Ticket.objects.none()
+            location_queryset = queryset
+        elif user.location:
+            location_queryset = queryset.filter(location=user.location)
+        else:
+            return Ticket.objects.none()
+
+        requested_statuses = self.request.query_params.get('status')
+        if requested_statuses:
+            statuses = requested_statuses.split(',')
+            valid_statuses = {status for status, _ in Ticket.Status.choices}
+            location_queryset = location_queryset.filter(
+                status__in=[status for status in statuses if status in valid_statuses]
+            )
+
+        return location_queryset
 
     def get_serializer_class(self):
         if self.action in ['list','retrieve']:
             return TicketReadSerializer
         return TicketWriteSerializer
+
+    def create(self, request, *args, **kwargs):
+        write_serializer = self.get_serializer(data=request.data)
+        write_serializer.is_valid(raise_exception=True)
+        self.perform_create(write_serializer)
+
+        read_serializer = TicketReadSerializer(
+            write_serializer.instance,
+            context=self.get_serializer_context(),
+        )
+        headers = self.get_success_headers(read_serializer.data)
+        return Response(
+            read_serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
     def perform_create(self, serializer):
         comment = serializer.validated_data.pop('comment','Utworzenie zgłoszenia w systemie')
         serializer.save(user=self.request.user,comment=comment)
@@ -49,8 +79,9 @@ class TicketViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user, comment=comment)
 
     @action(detail=True,methods=['post'],url_path='change-status')
+    @transaction.atomic
     def change_status(self,request,pk=None):
-        ticket = self.get_object()
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
         if request.user.role == 'TECHNICIAN' and ticket.assigned_worker_id != request.user.id:
             return Response({"detail": "Tylko przypisany pracownik może zmienić status."}, status=status.HTTP_403_FORBIDDEN)
         new_status = request.data.get('status')
