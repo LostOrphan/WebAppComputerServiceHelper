@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getCategories, createPart } from '../../api/inventory';
-import type { PartCategory } from '../../types/inventory';
+import { getCategories, createPart, updatePart } from '../../api/inventory';
+import type { Part, PartCategory } from '../../types/inventory';
 import type { CreatePartPayload } from '../../types/inventory';
 
 interface SpecificationRow {
@@ -13,10 +13,11 @@ interface AddPartModalProps {
   onClose: () => void;
   onSuccess: () => void;
   initialEan?: string; // Kod ze skanera przekazany po nieudanym szukaniu
+  partToEdit?: Part | null;
 }
 
-export const AddPartModal: React.FC<AddPartModalProps> = ({ 
-  isOpen, onClose, onSuccess, initialEan 
+export const AddPartModal: React.FC<AddPartModalProps> = ({
+  isOpen, onClose, onSuccess, initialEan, partToEdit = null
 }) => {
   const [categories, setCategories] = useState<PartCategory[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -37,12 +38,24 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
   // Pobieranie kategorii oraz ustawianie EAN po otwarciu
   useEffect(() => {
     if (isOpen) {
-      setFormData(prev => ({ 
-        ...prev, 
+      setFormData(partToEdit ? {
+        name: partToEdit.name,
+        brand: partToEdit.brand || '',
+        sku: partToEdit.sku,
+        ean: partToEdit.ean || '',
+        category: partToEdit.category,
+        default_buy_price_net: partToEdit.default_buy_price_net,
+        sell_price_gross: partToEdit.sell_price_gross,
+        unit: partToEdit.unit,
+        specifications: partToEdit.specifications,
+      } : {
+        ...formData,
         ean: initialEan || '',
-        sku: '' // Czyścimy SKU, żeby system sam wygenerował nowe
-      }));
-      setSpecificationRows([]);
+        sku: ''
+      });
+      setSpecificationRows(partToEdit
+        ? Object.entries(partToEdit.specifications || {}).map(([name, value]) => ({ name, value: String(value) }))
+        : []);
       setError(null);
       
       // Pobierz kategorie, jeśli jeszcze ich nie mamy
@@ -52,7 +65,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
           .catch(() => setError('Nie udało się pobrać kategorii.'));
       }
     }
-  }, [isOpen, initialEan, categories.length]);
+  }, [isOpen, initialEan, categories.length, partToEdit]);
 
   if (!isOpen) return null;
 
@@ -73,7 +86,12 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
     }, {});
 
     try {
-      await createPart({ ...formData, specifications });
+      const payload = { ...formData, specifications };
+      if (partToEdit) {
+        await updatePart(partToEdit.id, payload);
+      } else {
+        await createPart(payload);
+      }
       onSuccess(); // Odświeża tabelę w Inventory.tsx
       onClose();   // Zamyka modal
     } catch (err: any) {
@@ -101,7 +119,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center border-b pb-3">
-          <h2 className="text-xl font-bold text-slate-800">Dodaj nowy produkt</h2>
+          <h2 className="text-xl font-bold text-slate-800">{partToEdit ? 'Edytuj produkt' : 'Dodaj nowy produkt'}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
         </div>
 
@@ -263,7 +281,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
               disabled={isSubmitting || formData.category === 0}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? 'Zapisywanie...' : 'Zapisz produkt'}
+              {isSubmitting ? 'Zapisywanie...' : partToEdit ? 'Zapisz zmiany' : 'Zapisz produkt'}
             </button>
           </div>
         </form>

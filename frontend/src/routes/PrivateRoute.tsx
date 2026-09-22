@@ -1,9 +1,14 @@
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import type { User } from '../types/auth';
 
-export const PrivateRoute: React.FC=()=>{
-    const {isAuthenticated, isLoading} = useAuth();
+interface PrivateRouteProps {
+    requiredRoles?: User['role'][];
+}
+
+export const PrivateRoute: React.FC<PrivateRouteProps> = ({ requiredRoles }) => {
+    const { isAuthenticated, isLoading, user } = useAuth();
 
     if(isLoading){
         return(
@@ -12,5 +17,12 @@ export const PrivateRoute: React.FC=()=>{
             </div>
         );
     }
-    return isAuthenticated?<Outlet /> : <Navigate to="/work/login" replace />;
+    if (!isAuthenticated) {
+        return <Navigate to="/work/login" replace />;
+    }
+
+    if (requiredRoles && (!user || !requiredRoles.includes(user.role))) {
+        return <Navigate to="/work/dashboard" replace />;
+    }
+    return <Outlet />;
 };

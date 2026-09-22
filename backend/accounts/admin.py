@@ -27,5 +27,5 @@ class CityAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ('name', 'city', 'address', 'is_active')
+    list_display = ('name', 'city', 'address', 'email', 'is_active')
     list_filter = ('city', 'is_active')

@@ -52,6 +52,12 @@ class AccountApiTests(APITestCase):
 		self.worker = User.objects.create_user(
 			username='worker', role=User.Role.TECHNICIAN, location=self.location
 		)
+		self.archived_worker = User.objects.create_user(
+			username='ARCHIVED_old-worker',
+			role=User.Role.TECHNICIAN,
+			location=self.location,
+			is_active=False,
+		)
 
 	def test_non_owner_sees_only_active_locations(self):
 		self.client.force_authenticate(self.worker)
@@ -61,6 +67,16 @@ class AccountApiTests(APITestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual([item['name'] for item in response.data], ['Centrum'])
 
+	def test_location_email_is_returned(self):
+		self.location.email = 'centrum@example.com'
+		self.location.save(update_fields=['email'])
+		self.client.force_authenticate(self.owner)
+
+		response = self.client.get('/api/accounts/locations/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data[0]['email'], 'centrum@example.com')
+
 	def test_owner_sees_inactive_locations(self):
 		self.client.force_authenticate(self.owner)
 
@@ -68,3 +84,32 @@ class AccountApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(len(response.data), 2)
+		self.assertEqual(response.data[0]['name'], 'Centrum')
+
+	def test_public_locations_endpoint_requires_no_authentication(self):
+		response = self.client.get('/api/accounts/locations/public/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual([item['name'] for item in response.data], ['Centrum'])
+
+	def test_users_list_contains_only_active_users(self):
+		self.client.force_authenticate(self.owner)
+
+		response = self.client.get('/api/accounts/users/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(
+			{item['username'] for item in response.data},
+			{'owner', 'worker'},
+		)
+
+	def test_archived_users_endpoint_contains_only_inactive_users(self):
+		self.client.force_authenticate(self.owner)
+
+		response = self.client.get('/api/accounts/users/archived/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(
+			[item['username'] for item in response.data],
+			['ARCHIVED_old-worker'],
+		)

@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from accounts.models import City, Location
+from accounts.models import City, Location, Voivodeship
 from .models import PartCategory, Part, Stock
 from .serializers import PartSerializer
 
@@ -13,7 +13,8 @@ User = get_user_model()
 
 class InventoryModelTests(APITestCase):
 	def setUp(self):
-		self.city = City.objects.create(name='Gdansk')
+		voivodeship = Voivodeship.objects.create(code='PM', name='Pomorskie')
+		self.city = City.objects.create(name='Gdansk', voivodeship=voivodeship)
 		self.location = Location.objects.create(
 			name='Centrum', address='Dluga 1', postal_code='80-001', city=self.city
 		)
@@ -29,6 +30,13 @@ class InventoryModelTests(APITestCase):
 		)
 
 		self.assertTrue(stock.is_low_stock)
+
+	def test_zero_minimum_disables_low_stock(self):
+		stock = Stock.objects.create(
+			part=self.part, location=self.location, quantity=0, min_quantity=0
+		)
+
+		self.assertFalse(stock.is_low_stock)
 
 	def test_part_serializer_rejects_negative_prices(self):
 		serializer = PartSerializer(data={
@@ -46,16 +54,25 @@ class InventoryModelTests(APITestCase):
 
 class InventoryApiTests(APITestCase):
 	def setUp(self):
-		self.city = City.objects.create(name='Gdansk')
+		voivodeship = Voivodeship.objects.create(code='PM', name='Pomorskie')
+		self.city = City.objects.create(name='Gdansk', voivodeship=voivodeship)
 		self.location = Location.objects.create(
 			name='Centrum', address='Dluga 1', postal_code='80-001', city=self.city
 		)
 		self.other_location = Location.objects.create(
 			name='Wrzeszcz', address='Grunwaldzka 2', postal_code='80-002', city=self.city
 		)
+		self.inactive_location = Location.objects.create(
+			name='Nieaktywna', address='Krotka 3', postal_code='80-003', city=self.city,
+			is_active=False,
+		)
 		self.owner = User.objects.create_user(username='owner', role=User.Role.OWNER)
 		self.worker = User.objects.create_user(
 			username='worker', role=User.Role.TECHNICIAN, location=self.location
+		)
+		self.inactive_worker = User.objects.create_user(
+			username='inactive-worker', role=User.Role.TECHNICIAN,
+			location=self.inactive_location,
 		)
 		category = PartCategory.objects.create(name='Laptopy')
 		part = Part.objects.create(
@@ -82,3 +99,10 @@ class InventoryApiTests(APITestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(len(response.data), 1)
 		self.assertTrue(response.data[0]['is_low_stock'])
+
+	def test_worker_with_inactive_location_is_forbidden(self):
+		self.client.force_authenticate(self.inactive_worker)
+
+		response = self.client.get('/api/inventory/stock/')
+
+		self.assertEqual(response.status_code, 403)

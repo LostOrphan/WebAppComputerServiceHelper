@@ -22,4 +22,4 @@ class ClientSerializer(serializers.ModelSerializer):
 class ClientMinimalSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
-        fields = ['id','first_name','last_name','phone_number']
+        fields = ['id','first_name','last_name','phone_number','email']

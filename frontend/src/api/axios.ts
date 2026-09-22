@@ -33,15 +33,18 @@ api.interceptors.response.use(
                     const response = await axios.post('http://127.0.0.1:8000/api/auth/token/refresh/', {
                         refresh: refreshToken,
                 });
-                const {access} = response.data;
+                const { access, refresh } = response.data;
                 localStorage.setItem('access_token',access);
+                if (refresh) {
+                    localStorage.setItem('refresh_token', refresh);
+                }
 
                 originalRequest.headers.Authorization = `Bearer ${access}`;
                 return api(originalRequest);
             }catch(refreshError){
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('refresh_token');
-                window.location.href='/login';
+                    window.location.href='/work/login';
                 return Promise.reject(refreshError);
             }
         }

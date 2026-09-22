@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
-
+from django.db.models import Q
 
 class Ticket(models.Model):
     class Status(models.TextChoices):
@@ -36,19 +36,37 @@ class Ticket(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    ALLOWED_STATUS_TRANSITIONS = {
+        Status.NEW: {Status.DIAGNOSIS, Status.REJECTED},
+        Status.DIAGNOSIS: {Status.IN_PROGRESS, Status.WAITING_FOR_PARTS, Status.REJECTED},
+        Status.WAITING_FOR_PARTS: {Status.IN_PROGRESS, Status.REJECTED},
+        Status.IN_PROGRESS: {Status.READY, Status.WAITING_FOR_PARTS, Status.REJECTED},
+        Status.READY: {Status.CLOSED},
+        Status.CLOSED: set(),
+        Status.REJECTED: set(),
+    }
+
+    def can_transition_to(self, new_status):
+        return new_status == self.status or new_status in self.ALLOWED_STATUS_TRANSITIONS.get(self.status, set())
+
     def save(self, *args, user=None, comment="", **kwargs):
         is_new = self.pk is None
         status_changed = False
+        assignment_changed = False
 
         if not self.ticket_code:
             self.ticket_code = f"TCK-{uuid.uuid4().hex[:6].upper()}"
 
         if not is_new:
-            old_status = Ticket.objects.get(pk=self.pk).status
+            old_ticket = Ticket.objects.get(pk=self.pk)
+            old_status = old_ticket.status
             if old_status != self.status:
                 status_changed = True
+            if old_ticket.assigned_worker_id != self.assigned_worker_id:
+                assignment_changed = True
         else:
             status_changed = True 
+            assignment_changed = self.assigned_worker_id is not None
 
         super().save(*args, **kwargs)
 
@@ -58,6 +76,12 @@ class Ticket(models.Model):
                 status=self.status,
                 changed_by=user,
                 comment=comment
+            )
+
+        if assignment_changed:
+            TicketAssignmentHistory.objects.create(
+                ticket=self,
+                worker=self.assigned_worker,
             )
 
     def __str__(self):
@@ -87,3 +111,42 @@ class TicketPart(models.Model):
     part = models.ForeignKey('inventory.Part', on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
     price_at_use = models.DecimalField(max_digits=8, decimal_places=2)
+
+class TicketAssignmentHistory(models.Model):
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="assignment_history",
+    )
+    worker = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ticket_assignment_history",
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+class ServicePricing(models.Model):
+    name = models.CharField(max_length=100)
+    price = models.DecimalField(max_digits=8, decimal_places=2)
+    description = models.TextField(blank=True)
+# class TicketWorkSession(models.Model):
+#     ticket = models.ForeignKey(
+#         Ticket,
+#         on_delete=models.CASCADE,
+#         related_name="work_sessions",
+#     )
+#     worker = models.ForeignKey(
+#         settings.AUTH_USER_MODEL,
+#         on_delete=models.PROTECT,
+#         related_name="ticket_work_sessions",
+#     )
+#     started_at = models.DateTimeField(auto_now_add=True)
+#     ended_at = models.DateTimeField(null=True, blank=True)
+#     last_seen_at = models.DateTimeField(auto_now=True)
+#     class Meta:
+#         constraints = [
+#             models.UniqueConstraint(
+#                 fields=["ticket"],
+#                 condition=Q(ended_at__isnull=True),
+#                 name="one_active_work_session_per_ticket",
+#             )
+#         ]

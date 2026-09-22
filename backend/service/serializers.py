@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Ticket, TicketStatusHistory, TicketPart
+from .models import Ticket, TicketStatusHistory, TicketAssignmentHistory, TicketPart
 from clients.serializers import ClientMinimalSerializer
 from accounts.serializers import UserReadSerializer
 from inventory.serializers import PartSerializer
@@ -14,6 +14,13 @@ class TicketStatusHistorySerializer(serializers.ModelSerializer):
 
     def get_changed_by_name(self,obj) -> str:
         return obj.changed_by.get_full_name() if obj.changed_by else "System"
+
+class TicketAssignmentHistorySerializer(serializers.ModelSerializer):
+    worker = UserReadSerializer(read_only=True)
+
+    class Meta:
+        model = TicketAssignmentHistory
+        fields = ['id', 'worker', 'assigned_at']
 
 class TicketPartReadSerializer(serializers.ModelSerializer):
     part = PartSerializer(read_only=True)
@@ -47,17 +54,18 @@ class TicketReadSerializer(serializers.ModelSerializer):
     assigned_worker = UserReadSerializer(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     status_history = TicketStatusHistorySerializer(many=True, read_only=True)
+    assignment_history = TicketAssignmentHistorySerializer(many=True, read_only=True)
     used_parts = TicketPartReadSerializer(many=True, read_only=True)
     total_parts_cost = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
         fields = [
-            'id', 'ticket_code', 'client', 'location', 'assigned_worker',
+            'id', 'ticket_code', 'client', 'location', 'assigned_worker','ticket_code',
             'device_name', 'serial_number', 'device_passcode', 
             'problem_description', 'diagnosis_note', 'status', 'status_display',
             'estimated_cost', 'final_cost', 'total_parts_cost',
-            'used_parts', 'status_history', 'created_at', 'updated_at'
+            'used_parts', 'status_history', 'assignment_history', 'created_at', 'updated_at'
         ]
 
     def get_total_parts_cost(self, obj) -> float:
@@ -79,7 +87,42 @@ class TicketWriteSerializer(serializers.ModelSerializer):
             'estimated_cost', 'final_cost', 'comment'
         ]
 
+    def create(self, validated_data):
+        user = validated_data.pop('user', None)
+        comment = validated_data.pop('comment', '')
+        ticket = Ticket(**validated_data)
+        ticket.save(user=user, comment=comment)
+        return ticket
+
+    def update(self, instance, validated_data):
+        user = validated_data.pop('user', None)
+        comment = validated_data.pop('comment', '')
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save(user=user, comment=comment)
+        return instance
+
     def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        location = attrs.get('location', self.instance.location if self.instance else None)
+        if self.instance and 'status' in attrs:
+            raise serializers.ValidationError({
+                'status': 'Status należy zmieniać przez dedykowany endpoint.'
+            })
+        if self.instance and 'assigned_worker' in attrs:
+            raise serializers.ValidationError({
+                'assigned_worker': 'Przypisanie należy zmieniać przez dedykowany workflow.'
+            })
+        if user and getattr(user, 'role', None) != 'OWNER' and location != user.location:
+            raise serializers.ValidationError({'location': 'Zgłoszenie musi należeć do aktywnej lokalizacji pracownika.'})
+
+        assigned_worker = attrs.get('assigned_worker')
+        if assigned_worker and assigned_worker.role not in ['MANAGER', 'TECHNICIAN']:
+            raise serializers.ValidationError({'assigned_worker': 'Do zgłoszenia można przypisać tylko pracownika serwisu.'})
+        if assigned_worker and assigned_worker.location_id != location.id:
+            raise serializers.ValidationError({'assigned_worker': 'Pracownik musi należeć do lokalizacji zgłoszenia.'})
+
         parts_cost = 0
         final_cost = attrs.get('final_cost')
         if final_cost is not None and self.instance:

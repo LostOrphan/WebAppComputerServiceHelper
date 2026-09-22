@@ -3,18 +3,19 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
 
+from accounts.permissions import HasActiveLocation
 from .models import PartCategory, Part, Stock
 from .serializers import PartCategorySerializer, PartSerializer, StockReadSerializer, StockWriteSerializer
 
 class PartCategoryView(viewsets.ModelViewSet):
     queryset = PartCategory.objects.all().order_by('name')
     serializer_class = PartCategorySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
 
 class PartView(viewsets.ModelViewSet):
     queryset = Part.objects.all().select_related('category').order_by('name')
     serializer_class = PartSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
 
     filter_backends = [filters.SearchFilter]
     # Dodane nowe pola do silnika wyszukiwania (w tym kod ze skanera)
@@ -33,7 +34,7 @@ class PartView(viewsets.ModelViewSet):
             )
 
 class StockView(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     filter_backends = [filters.SearchFilter]
     # Dodano wyszukiwanie zasobów magazynowych bezpośrednio po EAN
     search_fields = ['part__name', 'part__sku', 'part__ean']
@@ -54,6 +55,10 @@ class StockView(viewsets.ModelViewSet):
         category_id = self.request.query_params.get('category')
         if category_id:
             visible_queryset = visible_queryset.filter(part__category_id=category_id)
+
+        location_id = self.request.query_params.get('location')
+        if location_id and getattr(user, 'role', None) == 'OWNER':
+            visible_queryset = visible_queryset.filter(location_id=location_id)
 
         return visible_queryset
 
