@@ -6,7 +6,14 @@ from rest_framework.test import APITestCase
 from accounts.models import City, Location, Voivodeship
 from clients.models import Client
 from inventory.models import PartCategory, Part, Stock
-from .models import Ticket, TicketAssignmentHistory, TicketPart, TicketStatusHistory
+from .models import (
+	Ticket,
+	TicketAssignmentHistory,
+	TicketPart,
+	TicketStatusHistory,
+	ServicePricing,
+	LocationServicePrice,
+)
 from .serializers import TicketWriteSerializer
 
 
@@ -27,6 +34,14 @@ class ServiceTests(APITestCase):
 		self.user = User.objects.create_user(
 			username='technician', password='password',
 			role=User.Role.TECHNICIAN, location=self.location,
+		)
+		self.manager = User.objects.create_user(
+			username='manager', password='password',
+			role=User.Role.MANAGER, location=self.location,
+		)
+		self.owner = User.objects.create_user(
+			username='owner', password='password',
+			role=User.Role.OWNER,
 		)
 		self.inactive_user = User.objects.create_user(
 			username='inactive-technician', password='password',
@@ -71,6 +86,8 @@ class ServiceTests(APITestCase):
 		self.assertEqual(response.status_code, 201)
 		self.assertRegex(response.data['ticket_code'], r'^TCK-[A-F0-9]{6}$')
 		ticket = Ticket.objects.get(pk=response.data['id'])
+		self.assertEqual(ticket.created_by, self.user)
+		self.assertEqual(response.data['created_by']['id'], self.user.id)
 		history = ticket.status_history.get()
 		self.assertEqual(history.changed_by, self.user)
 		self.assertEqual(history.comment, 'Przyjęto nowe zgłoszenie')
@@ -110,6 +127,20 @@ class ServiceTests(APITestCase):
 		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
 		assignment = TicketAssignmentHistory.objects.get(ticket=ticket)
 		self.assertEqual(assignment.worker, self.user)
+
+	def test_claim_is_idempotent_for_already_assigned_worker(self):
+		ticket = self.create_ticket()
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/claim/',
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		ticket.refresh_from_db()
+		self.assertEqual(ticket.assigned_worker, self.user)
+		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
 
 	def test_generic_update_cannot_change_status_or_assignment(self):
 		ticket = self.create_ticket()
@@ -224,3 +255,62 @@ class ServiceTests(APITestCase):
 
 		self.assertEqual(response.status_code, 400)
 		self.assertFalse(TicketPart.objects.filter(ticket=ticket).exists())
+
+	def test_service_catalog_uses_location_override(self):
+		service = ServicePricing.objects.create(
+			name='Czyszczenie', default_price=Decimal('100.00')
+		)
+		LocationServicePrice.objects.create(
+			location=self.location, service=service, custom_price=Decimal('125.00')
+		)
+		self.client.force_authenticate(self.user)
+
+		response = self.client.get('/api/service/services/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data[0]['price'], '125.00')
+		self.assertTrue(response.data[0]['is_available'])
+
+	def test_manager_can_change_only_own_location_price(self):
+		service = ServicePricing.objects.create(
+			name='Diagnoza', default_price=Decimal('80.00')
+		)
+		self.client.force_authenticate(self.manager)
+
+		response = self.client.post('/api/service/location-service-prices/', {
+			'location': self.location.pk,
+			'service': service.pk,
+			'custom_price': '95.00',
+		}, format='json')
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data['effective_price'], '95.00')
+
+	def test_technician_cannot_modify_location_price(self):
+		service = ServicePricing.objects.create(
+			name='Odzyskiwanie danych', default_price=Decimal('300.00')
+		)
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post('/api/service/location-service-prices/', {
+			'location': self.location.pk,
+			'service': service.pk,
+			'custom_price': '350.00',
+		}, format='json')
+
+		self.assertEqual(response.status_code, 403)
+
+	def test_only_owner_can_modify_service_catalog(self):
+		self.client.force_authenticate(self.manager)
+		manager_response = self.client.post('/api/service/services/', {
+			'name': 'Niedozwolona usługa',
+			'default_price': '50.00',
+		}, format='json')
+		self.assertEqual(manager_response.status_code, 403)
+
+		self.client.force_authenticate(self.owner)
+		owner_response = self.client.post('/api/service/services/', {
+			'name': 'Nowa usługa',
+			'default_price': '50.00',
+		}, format='json')
+		self.assertEqual(owner_response.status_code, 201)

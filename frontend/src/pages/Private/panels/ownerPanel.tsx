@@ -43,6 +43,14 @@ const tiles: ManagementTile[] = [
     path: '/work/admin/company/orders',
     color: 'bg-purple-50 text-purple-600',
   },
+  {
+    id: 'services',
+    title: 'Cennik usług',
+    description: 'Zarządzaj usługami i cenami firmy',
+    icon: '',
+    path: '/work/admin/company/services',
+    color: 'bg-cyan-50 text-cyan-600',
+  },
 
   // {
   //   id: 'settings',

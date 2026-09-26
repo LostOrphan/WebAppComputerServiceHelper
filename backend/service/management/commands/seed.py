@@ -121,6 +121,7 @@ class Command(BaseCommand):
                 client=random.choice(clients),
                 location=loc,
                 assigned_worker=tech,
+                created_by=tech,
                 device_name=random.choice(devices),
                 serial_number=fake.ean13(),
                 problem_description=fake.paragraph(nb_sentences=3),

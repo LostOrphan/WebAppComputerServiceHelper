@@ -5,6 +5,7 @@ export interface TicketClient {
   first_name: string;
   last_name: string;
   phone_number: string | null;
+  email: string | null;
 }
 
 export interface TicketWorker {
@@ -19,6 +20,13 @@ export interface TicketPart {
   quantity: number;
   price_at_use: string;
   total_price: number;
+}
+
+export interface TicketService {
+  id: number;
+  ticket: number;
+  name: string;
+  price: string;
 }
 
 export interface TicketHistory {
@@ -36,6 +44,7 @@ export interface Ticket {
   client: TicketClient;
   location: number;
   assigned_worker: TicketWorker | null;
+  created_by: TicketWorker | null;
   device_name: string;
   serial_number: string;
   device_passcode: string;
@@ -46,7 +55,10 @@ export interface Ticket {
   estimated_cost: string | null;
   final_cost: string | null;
   total_parts_cost: number;
+  total_services_cost: number;
+  total_cost: number;
   used_parts: TicketPart[];
+  used_services: TicketService[];
   status_history: TicketHistory[];
   created_at: string;
   updated_at: string;
@@ -65,4 +77,24 @@ export interface PartOption {
   name: string;
   sku: string;
   sell_price_gross: string;
+}
+
+export interface ServicePricing {
+  id: number;
+  name: string;
+  description: string | null;
+  default_price: string;
+  is_active: boolean;
+  price: string;
+  is_available: boolean;
+}
+
+export interface LocationServicePrice {
+  id: number;
+  location: number;
+  service: number;
+  service_name: string;
+  custom_price: string | null;
+  is_available: boolean;
+  effective_price: string;
 }

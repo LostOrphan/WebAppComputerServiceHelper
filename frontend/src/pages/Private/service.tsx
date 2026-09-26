@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { createClient, createTicket, getClients, getTickets } from '../../api/service';
 import { useAuth } from '../../context/AuthContext';
 import type { ClientOption, Ticket, TicketStatus } from '../../types/service';
@@ -34,6 +35,7 @@ const normalizePolishPhone = (value: string) => {
 
 export const Service: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [matchedClient, setMatchedClient] = useState<ClientOption | null>(null);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
@@ -206,6 +208,13 @@ export const Service: React.FC = () => {
                     ? `Przypisany pracownik: ${ticket.assigned_worker.full_name}`
                     : 'Nieprzypisane'}
                 </p>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/work/service/${ticket.id}`)}
+                  className="mt-3 rounded border border-blue-200 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50"
+                >
+                  Szczegóły
+                </button>
               </article>
             ))}
           </div>

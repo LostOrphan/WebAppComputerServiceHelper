@@ -5,18 +5,25 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
-from .models import Ticket, TicketPart
-from .serializers import TicketStatusHistorySerializer
+from .models import Ticket, TicketPart, TicketService, ServicePricing, LocationServicePrice
+from .serializers import (
+    TicketStatusHistorySerializer,
+    ServiceReadSerializer,
+    ServicePricingWriteSerializer,
+    LocationServicePriceSerializer,
+)
 from django.db import transaction
+from django.db.models import Prefetch
 from .serializers import (
     TicketReadSerializer,
     TicketWriteSerializer,
     TicketPartReadSerializer,
     TicketPartWriteSerializer,
+    TicketServiceSerializer,
     PublicTicketStatusSerializer,
 )
 from inventory.models import Stock
-from accounts.permissions import HasActiveLocation
+from accounts.permissions import HasActiveLocation, IsOwner, IsOwnerOrManager
 
 class TicketViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
@@ -29,8 +36,8 @@ class TicketViewSet(viewsets.ModelViewSet):
             return Ticket.objects.none()
 
         user = self.request.user
-        queryset = Ticket.objects.select_related('client','location','assigned_worker').prefetch_related(
-            'status_history', 'assignment_history', 'used_parts__part'
+        queryset = Ticket.objects.select_related('client','location','assigned_worker','created_by').prefetch_related(
+            'status_history', 'assignment_history', 'used_parts__part', 'used_services'
         )
         # Właściciel widzi wszystkie zgłoszenia
         if getattr(user,'role',None) == 'OWNER':
@@ -73,7 +80,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         comment = serializer.validated_data.pop('comment','Utworzenie zgłoszenia w systemie')
-        serializer.save(user=self.request.user,comment=comment)
+        serializer.save(user=self.request.user, created_by=self.request.user, comment=comment)
     def perform_update(self, serializer):
         comment = serializer.validated_data.pop('comment','')
         serializer.save(user=self.request.user, comment=comment)
@@ -102,9 +109,9 @@ class TicketViewSet(viewsets.ModelViewSet):
     def claim(self, request, pk=None):
         ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
 
-        if ticket.assigned_worker_id:
+        if ticket.assigned_worker_id and ticket.assigned_worker_id != request.user.id:
             return Response(
-                {"detail": "To zgłoszenie jest już przypisane do pracownika."},
+                {"detail": "To zgłoszenie jest już przypisane do innego pracownika."},
                 status=status.HTTP_409_CONFLICT,
             )
         if ticket.status != Ticket.Status.NEW:
@@ -153,6 +160,47 @@ class TicketPartViewSet(viewsets.ModelViewSet):
 
         stock.quantity -= ticket_part.quantity
         stock.save()
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        stock = Stock.objects.select_for_update().filter(
+            location=instance.ticket.location,
+            part=instance.part,
+        ).first()
+        if stock:
+            stock.quantity += instance.quantity
+            stock.save(update_fields=['quantity'])
+        instance.delete()
+
+
+class TicketServiceViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
+    serializer_class = TicketServiceSerializer
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return TicketService.objects.none()
+
+        user = self.request.user
+        queryset = TicketService.objects.select_related('ticket')
+        if getattr(user, 'role', None) == 'OWNER':
+            return queryset
+        if user.location:
+            return queryset.filter(ticket__location=user.location)
+        return TicketService.objects.none()
+
+    def perform_create(self, serializer):
+        ticket = serializer.validated_data['ticket']
+        if ticket.status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS, Ticket.Status.IN_PROGRESS]:
+            raise serializers.ValidationError('Usługi można dodawać tylko podczas realizacji zgłoszenia.')
+        if self.request.user.role != 'OWNER' and ticket.location_id != self.request.user.location_id:
+            raise permissions.PermissionDenied('Nie możesz dodać usługi do zgłoszenia z innej lokalizacji.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.ticket.status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS, Ticket.Status.IN_PROGRESS]:
+            raise serializers.ValidationError('Usługi można usuwać tylko podczas realizacji zgłoszenia.')
+        instance.delete()
 class PublicTicketStatusView(GenericAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicTicketStatusSerializer
@@ -189,3 +237,57 @@ class PublicTicketStatusView(GenericAPIView):
             "updated_at": ticket.updated_at,
             "history": TicketStatusHistorySerializer(ticket.status_history.all(), many=True).data
         })
+
+class ServiceViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action not in ['list', 'retrieve']:
+            return [IsOwner()]
+        return [permissions.IsAuthenticated()]
+
+    def get_serializer_class(self):
+        if self.action in ['list', 'retrieve']:
+            return ServiceReadSerializer
+        return ServicePricingWriteSerializer
+
+    def get_queryset(self):
+        # Zwracamy aktywne usługi
+        location = self.request.user.location
+        location_prices = LocationServicePrice.objects.none()
+        if location:
+            location_prices = LocationServicePrice.objects.filter(location=location)
+        queryset = ServicePricing.objects.all()
+        if self.action == 'list' and self.request.user.role != 'OWNER':
+            queryset = queryset.filter(is_active=True)
+        return queryset.prefetch_related(
+            Prefetch(
+                'location_prices',
+                queryset=location_prices,
+                to_attr='requested_location_prices',
+            )
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Automatycznie przekazujemy lokację zalogowanego pracownika do serializera
+        context['location'] = self.request.user.location
+        return context
+
+
+class LocationServicePriceViewSet(viewsets.ModelViewSet):
+    serializer_class = LocationServicePriceSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [IsOwnerOrManager()]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = LocationServicePrice.objects.select_related('service', 'location')
+        if getattr(user, 'role', None) == 'OWNER':
+            return queryset
+        if user.location:
+            return queryset.filter(location=user.location)
+        return queryset.none()

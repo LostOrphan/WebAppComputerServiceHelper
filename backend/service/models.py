@@ -2,7 +2,8 @@ import uuid
 from django.db import models
 from django.conf import settings
 from django.db.models import Q
-
+from django.core.validators import MinValueValidator
+from accounts.models import Location
 class Ticket(models.Model):
     class Status(models.TextChoices):
         NEW = 'NEW', 'Nowe (Przyjęte)'
@@ -20,6 +21,12 @@ class Ticket(models.Model):
         on_delete=models.SET_NULL, 
         null=True, blank=True, 
         related_name='assigned_tickets'
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='created_tickets'
     )
 
     ticket_code = models.CharField(max_length=10, unique=True, editable=False)
@@ -112,6 +119,15 @@ class TicketPart(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     price_at_use = models.DecimalField(max_digits=8, decimal_places=2)
 
+
+class TicketService(models.Model):
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='used_services')
+    name = models.CharField(max_length=150)
+    price = models.DecimalField(max_digits=8, decimal_places=2)
+
+    def __str__(self):
+        return f"{self.ticket.ticket_code} - {self.name}"
+
 class TicketAssignmentHistory(models.Model):
     ticket = models.ForeignKey(
         Ticket,
@@ -125,9 +141,53 @@ class TicketAssignmentHistory(models.Model):
     )
     assigned_at = models.DateTimeField(auto_now_add=True)
 class ServicePricing(models.Model):
-    name = models.CharField(max_length=100)
-    price = models.DecimalField(max_digits=8, decimal_places=2)
-    description = models.TextField(blank=True)
+    name = models.CharField(max_length=150, unique=True)
+    description = models.TextField(blank=True, null=True)
+    default_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} (Domyślnie: {self.default_price} PLN)"
+
+
+class LocationServicePrice(models.Model):
+    """Ceny i dostępność usług dla konkretnego oddziału."""
+    location = models.ForeignKey('accounts.Location', on_delete=models.CASCADE, related_name='service_prices')
+    service = models.ForeignKey(ServicePricing, on_delete=models.CASCADE, related_name='location_prices')
+    
+    # Customowa cena dla tego oddziału (jeśli None -> system bierze Service.default_price)
+    custom_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    
+    # Czy dany oddział w ogóle wykonuje tę usługę (np. nie każdy punkt ma mikrolutowanie)
+    is_available = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['location', 'service'],
+                name='unique_location_service_price',
+            ),
+        ]
+
+    @property
+    def effective_price(self):
+        """Zwraca cennik oddziału, a jeśli go nie ma - cennik domyślny."""
+        if self.custom_price is not None:
+            return self.custom_price
+        return self.service.default_price
 # class TicketWorkSession(models.Model):
 #     ticket = models.ForeignKey(
 #         Ticket,

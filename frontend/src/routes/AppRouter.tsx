@@ -15,9 +15,11 @@ import { Employees } from '../pages/Private/company/employees';
 import { Branches } from '../pages/Private/company/branches';
 import { Warehouses } from '../pages/Private/company/warehouses';
 import { Orders } from '../pages/Private/company/orders';
+import { Services } from '../pages/Private/company/services';
 import { About } from '../pages/Public/about';
 import { BranchesList } from '../pages/Public/branchesList';
 import { Service } from '../pages/Private/service';
+import { TicketDetails } from '../pages/Private/ticketDetails';
 export const AppRouter: React.FC = () => {
   return (
     <Routes>
@@ -36,12 +38,14 @@ export const AppRouter: React.FC = () => {
           <Route path="/work/dashboard" element={<Dashboard />} />
           <Route path="/work/inventory" element={<Inventory />} />
           <Route path="/work/service" element={<Service />} />
+          <Route path="/work/service/:ticketId" element={<TicketDetails />} />
           <Route element={<PrivateRoute requiredRoles={["OWNER"]} />}>
             <Route path="/work/admin/company" element={<OwnerPanel />} />
               <Route path="/work/admin/company/employees" element={<Employees />} />
               <Route path="/work/admin/company/branches" element={<Branches />} />
               <Route path="/work/admin/company/warehouses" element={<Warehouses />} />
               <Route path="/work/admin/company/orders" element={<Orders />} />
+              <Route path="/work/admin/company/services" element={<Services />} />
           </Route>
           <Route element={<PrivateRoute requiredRoles={[ 'MANAGER']} />}>
             <Route path="/work/admin/branch" element={<BranchPanel />} />
