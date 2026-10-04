@@ -21,20 +21,17 @@ class Part(models.Model):
     name = models.CharField(max_length=150)
     brand = models.CharField(max_length=50, blank=True)
     
-    # Identyfikatory
     sku = models.CharField(max_length=50, unique=True, blank=True, db_index=True)
     ean = models.CharField(max_length=13, blank=True, null=True, db_index=True)
     
     category = models.ForeignKey(PartCategory, on_delete=models.PROTECT, related_name='parts')
     unit = models.CharField(max_length=10, choices=Unit.choices, default=Unit.PCS)
     
-    # Ceny
     default_buy_price_net = models.DecimalField(
         max_digits=8, decimal_places=2, help_text="Ostatnia/domyślna cena zakupu netto"
     )
     sell_price_gross = models.DecimalField(max_digits=8, decimal_places=2)
     
-    # Elastyczna specyfikacja (np. {"pojemnosc": "512GB", "interfejs": "NVMe"})
     specifications = models.JSONField(
         default=dict, blank=True, help_text="Parametry techniczne w formacie Key-Value"
     )
@@ -71,7 +68,6 @@ class Stock(models.Model):
         return self.min_quantity > 0 and self.quantity <= self.min_quantity
 
     def add_quantity(self, amount: int):
-        """Pomocnicza metoda do bezpiecznego zwiększania stanu"""
         self.quantity += amount
         self.save()
 

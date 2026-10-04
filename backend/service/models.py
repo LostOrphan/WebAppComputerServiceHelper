@@ -140,6 +140,7 @@ class TicketAssignmentHistory(models.Model):
         related_name="ticket_assignment_history",
     )
     assigned_at = models.DateTimeField(auto_now_add=True)
+
 class ServicePricing(models.Model):
     name = models.CharField(max_length=150, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -158,11 +159,9 @@ class ServicePricing(models.Model):
 
 
 class LocationServicePrice(models.Model):
-    """Ceny i dostępność usług dla konkretnego oddziału."""
     location = models.ForeignKey('accounts.Location', on_delete=models.CASCADE, related_name='service_prices')
     service = models.ForeignKey(ServicePricing, on_delete=models.CASCADE, related_name='location_prices')
     
-    # Customowa cena dla tego oddziału (jeśli None -> system bierze Service.default_price)
     custom_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -171,7 +170,6 @@ class LocationServicePrice(models.Model):
         validators=[MinValueValidator(0)],
     )
     
-    # Czy dany oddział w ogóle wykonuje tę usługę (np. nie każdy punkt ma mikrolutowanie)
     is_available = models.BooleanField(default=True)
 
     class Meta:
@@ -184,7 +182,6 @@ class LocationServicePrice(models.Model):
 
     @property
     def effective_price(self):
-        """Zwraca cennik oddziału, a jeśli go nie ma - cennik domyślny."""
         if self.custom_price is not None:
             return self.custom_price
         return self.service.default_price

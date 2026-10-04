@@ -12,7 +12,7 @@ interface AddPartModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
-  initialEan?: string; // Kod ze skanera przekazany po nieudanym szukaniu
+  initialEan?: string;
   partToEdit?: Part | null;
 }
 
@@ -27,10 +27,10 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
   const [formData, setFormData] = useState<CreatePartPayload>({
     name: '',
     brand: '',
-    sku: '', // Pozostawione puste -> backend wygeneruje np. PRT-000001
+    sku: '',
     ean: '',
     category: 0,
-    default_buy_price_net: '', // Zaktualizowana nazwa pola
+    default_buy_price_net: '',
     sell_price_gross: '',
     unit: 'PCS'
   });
@@ -260,7 +260,6 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
                   type="button"
                   onClick={() => removeSpecification(index)}
                   className="px-2 text-slate-400 hover:text-red-600"
-                  aria-label="Usuń specyfikację"
                 >
                   ×
                 </button>

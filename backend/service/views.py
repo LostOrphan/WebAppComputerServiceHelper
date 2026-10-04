@@ -25,7 +25,7 @@ from .serializers import (
 from inventory.models import Stock
 from accounts.permissions import HasActiveLocation, IsOwner, IsOwnerOrManager
 
-class TicketViewSet(viewsets.ModelViewSet):
+class TicketView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     filter_backends = [filters.SearchFilter,filters.OrderingFilter]
     search_fields = ['ticket_code','device_name','serial_number','client__first_name','client__last_name','client__phone_number']
@@ -39,7 +39,6 @@ class TicketViewSet(viewsets.ModelViewSet):
         queryset = Ticket.objects.select_related('client','location','assigned_worker','created_by').prefetch_related(
             'status_history', 'assignment_history', 'used_parts__part', 'used_services'
         )
-        # Właściciel widzi wszystkie zgłoszenia
         if getattr(user,'role',None) == 'OWNER':
             location_queryset = queryset
         elif user.location:
@@ -125,7 +124,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.save(user=request.user, comment=request.data.get('comment', 'Pracownik przyjął zgłoszenie'))
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
-class TicketPartViewSet(viewsets.ModelViewSet):
+class TicketPartView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
 
     def get_queryset(self):
@@ -173,7 +172,7 @@ class TicketPartViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
-class TicketServiceViewSet(viewsets.ModelViewSet):
+class TicketServiceView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     serializer_class = TicketServiceSerializer
 
@@ -238,7 +237,7 @@ class PublicTicketStatusView(GenericAPIView):
             "history": TicketStatusHistorySerializer(ticket.status_history.all(), many=True).data
         })
 
-class ServiceViewSet(viewsets.ModelViewSet):
+class ServiceView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_permissions(self):
@@ -275,7 +274,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return context
 
 
-class LocationServicePriceViewSet(viewsets.ModelViewSet):
+class LocationServicePriceView(viewsets.ModelViewSet):
     serializer_class = LocationServicePriceSerializer
 
     def get_permissions(self):

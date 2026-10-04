@@ -6,10 +6,7 @@ class IsOwner(BasePermission):
 
 class IsOwnerOrManager(BasePermission):
     def has_permission(self, request, view):
-        return bool(
-            request.user and request.user.is_authenticated and 
-            request.user.role in ['OWNER', 'MANAGER']
-        )
+        return bool(request.user and request.user.is_authenticated and request.user.role in ['OWNER', 'MANAGER'])
 
 class IsOwnerOrReadOnly(BasePermission):
     def has_permission(self, request, view):
@@ -21,14 +18,10 @@ class IsOwnerOrReadOnly(BasePermission):
 
 class HasActiveLocation(BasePermission):
     message = 'Przypisana lokalizacja jest nieaktywna.'
-
     def has_permission(self, request, view):
         user = request.user
-
         if not user or not user.is_authenticated:
             return False
-
         if user.role == 'OWNER':
             return True
-
         return bool(user.location and user.location.is_active)

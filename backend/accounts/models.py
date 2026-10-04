@@ -43,7 +43,6 @@ class CustomUser(AbstractUser):
         OWNER = 'OWNER', 'Szef firmy'
         MANAGER = 'MANAGER', 'Kierownik serwisu'
         TECHNICIAN = 'TECHNICIAN', 'Serwisant'
-    # idEmployee = models.CharField(max_length=5)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.TECHNICIAN)
     location = models.ForeignKey(Location,on_delete=models.SET_NULL,null=True,blank=True,related_name='employees')
 

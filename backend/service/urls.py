@@ -1,23 +1,22 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    TicketViewSet,
-    TicketPartViewSet,
-    TicketServiceViewSet,
+    TicketView,
+    TicketPartView,
+    TicketServiceView,
     PublicTicketStatusView,
-    ServiceViewSet,
-    LocationServicePriceViewSet,
+    ServiceView,
+    LocationServicePriceView,
 )
 
 router = DefaultRouter()
-router.register(r'tickets', TicketViewSet, basename='ticket')
-router.register(r'ticket-parts', TicketPartViewSet, basename='ticket-part')
-router.register(r'ticket-services', TicketServiceViewSet, basename='ticket-service')
-router.register(r'services', ServiceViewSet, basename='service')
-router.register(r'location-service-prices', LocationServicePriceViewSet, basename='location-service-price')
+router.register(r'tickets', TicketView, basename='ticket')
+router.register(r'ticket-parts', TicketPartView, basename='ticket-part')
+router.register(r'ticket-services', TicketServiceView, basename='ticket-service')
+router.register(r'services', ServiceView, basename='service')
+router.register(r'location-service-prices', LocationServicePriceView, basename='location-service-price')
 
 urlpatterns = [
-    # Dedykowany endpoint publiczny (musi być przed include(router.urls))
     path('public-status/', PublicTicketStatusView.as_view(), name='public-ticket-status'),
     path('', include(router.urls)),
 ]

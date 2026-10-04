@@ -1,6 +1,6 @@
 from django.db import models
 from phonenumber_field.modelfields import PhoneNumberField
-# Klient
+
 class Client(models.Model):
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
@@ -12,9 +12,8 @@ class Client(models.Model):
     is_anonymized = models.BooleanField(default=False)
 
     def anonymize(self):
-        """Anonimizacja danych klienta"""
         self.first_name = "Klient"
-        self.last_name = "#{self.id}"
+        self.last_name = f"#{self.id}"
         self.phone_number = None
         self.email = None
         self.is_anonymized = True

@@ -38,7 +38,7 @@ class UserReadSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id','username','first_name','last_name','full_name','role','role_display','location','is_active','is_staff']
 
-    def get_full_name(self,obj) -> str:
+    def get_full_name(self,obj):
         return obj.get_full_name() or obj.username #funkcja AbstractUser
 
 class UserWriteSerializer(serializers.ModelSerializer):
@@ -52,9 +52,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
         location = attrs.get('location')
 
         if location and not location.is_active:
-            raise serializers.ValidationError({
-                'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'
-            })
+            raise serializers.ValidationError({'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'})
 
         if request and request.user:
             current_user = request.user
@@ -64,9 +62,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
                 attrs['location'] = current_user.location
 
                 if current_user.location and not current_user.location.is_active:
-                    raise serializers.ValidationError({
-                        'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'
-                    })
+                    raise serializers.ValidationError({'location': 'Nie można przypisać pracownika do nieaktywnej lokalizacji.'})
         return super().validate(attrs)
 
     def create(self,validated_data):

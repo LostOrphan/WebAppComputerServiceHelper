@@ -9,7 +9,6 @@ class PartCategorySerializer(serializers.ModelSerializer):
 
 class PartSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
-    # SKU nie jest absolutnie wymagane na wejściu, bo model potrafi je wygenerować
     sku = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:

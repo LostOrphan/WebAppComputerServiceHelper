@@ -179,12 +179,10 @@ class ServiceReadSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_price(self, obj):
-        # Pobieramy lokalizację przekazaną w kontekście (np. z zalogowanego usera)
         location = self.context.get('location')
         if not location:
             return str(obj.default_price)
 
-        # Szukamy indywidualnej ceny dla tej lokalizacji
         loc_prices = getattr(obj, 'requested_location_prices', None)
         loc_price = loc_prices[0] if loc_prices else None
         if loc_price and loc_price.custom_price is not None:

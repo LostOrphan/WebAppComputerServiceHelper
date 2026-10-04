@@ -42,7 +42,6 @@ class LocationView(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        # Właściciel widzi wszystkei lokacje, pozostali tylko aktywne
         if getattr(user,'role',None) == 'OWNER':
             return Location.objects.all().select_related('city').order_by('-is_active', 'name')
         return Location.objects.filter(is_active=True).select_related('city').order_by('name')
@@ -74,13 +73,10 @@ class UserView(viewsets.ModelViewSet):
         is_archived_view = self.action == 'archived'
         users = User.objects.filter(is_active=not is_archived_view).select_related('location')
 
-        # Właściciel widzi wszystkich aktywnych albo zarchiwizowanych użytkowników
         if getattr(user,'role',None) == 'OWNER':
             return users
-        # Kierownik i pracownik widzi tylko pracowników swojego oddziału
         if user.location:
             return users.filter(location=user.location)
-        # Brak przydzielonej lokacji -> widok tylko siebie
         return users.filter(id=user.id)
 
     def get_serializer_class(self):

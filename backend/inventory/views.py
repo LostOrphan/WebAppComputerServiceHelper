@@ -18,13 +18,11 @@ class PartView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
 
     filter_backends = [filters.SearchFilter]
-    # Dodane nowe pola do silnika wyszukiwania (w tym kod ze skanera)
     search_fields = ['name', 'sku', 'ean', 'brand', 'category__name']
     
     def perform_create(self, serializer):
         part = serializer.save()
 
-        # Nadal inicjujemy zerowy stan po stworzeniu nowej części
         if self.request.user.location:
             Stock.objects.create(
                 part=part,
@@ -36,7 +34,6 @@ class PartView(viewsets.ModelViewSet):
 class StockView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     filter_backends = [filters.SearchFilter]
-    # Dodano wyszukiwanie zasobów magazynowych bezpośrednio po EAN
     search_fields = ['part__name', 'part__sku', 'part__ean']
 
     def get_queryset(self):
@@ -74,12 +71,8 @@ class StockView(viewsets.ModelViewSet):
         serializer = StockReadSerializer(low_stock_items, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # --- NOWY ENDPOINT DO SZYBKIEGO PRZYJMOWANIA TOWARU ---
     @action(detail=False, methods=['post'], url_path='receive-goods')
     def receive_goods(self, request):
-        """
-        Przyjmuje ładunek: {"identifier": "EAN / SKU / ID", "quantity": 1}
-        """
         identifier = request.data.get('identifier')
         quantity = int(request.data.get('quantity', 1))
         user_location = request.user.location
@@ -96,8 +89,6 @@ class StockView(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Szukamy produktu - Q pozwala na wyszukiwanie po jednym z kilku warunków (OR)
-        # Jeśli identifier składa się z samych cyfr i jest krótki, sprawdzamy też ID
         lookup = Q(sku=identifier) | Q(ean=identifier)
         if str(identifier).isdigit() and len(str(identifier)) < 8:
             lookup |= Q(id=identifier)
@@ -110,7 +101,6 @@ class StockView(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Produkt istnieje! Zwiększamy jego ilość.
         stock, created = Stock.objects.get_or_create(
             part=part,
             location=user_location,
