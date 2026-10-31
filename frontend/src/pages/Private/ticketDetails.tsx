@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { addTicketPart, addTicketService, changeTicketStatus, claimTicket, deleteTicketPart, deleteTicketService, getServicePricing, getTicket, updateTicket, updateTicketCosts } from '../../api/service';
+import { addTicketPart, addTicketService, changeTicketStatus, claimTicket, deleteTicketPart, deleteTicketService, getServicePricing, getTicket, resumeTicketWork, takeOverTicket, updateTicket, updateTicketCosts, waitForTicketParts } from '../../api/service';
 import { getStocks } from '../../api/inventory';
+import { useAuth } from '../../context/AuthContext';
 import type { Stock } from '../../types/inventory';
 import type { ServicePricing, Ticket, TicketStatus } from '../../types/service';
 
@@ -14,6 +15,7 @@ type EstimatePart = { key: string; id?: number; partId: number; name: string; sk
 export const TicketDetails: React.FC = () => {
   const { ticketId } = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [services, setServices] = useState<ServicePricing[]>([]);
@@ -143,9 +145,24 @@ export const TicketDetails: React.FC = () => {
     void runAction(() => changeTicketStatus(ticket.id, status));
   };
 
+  const waitForParts = () => {
+    if (!ticket) return;
+    void runAction(() => waitForTicketParts(ticket.id));
+  };
+
+  const resumeWork = () => {
+    if (!ticket) return;
+    void runAction(() => resumeTicketWork(ticket.id));
+  };
+
   const startDiagnosis = () => {
     if (!ticket) return;
     void runAction(() => claimTicket(ticket.id));
+  };
+
+  const takeOver = () => {
+    if (!ticket) return;
+    void runAction(() => takeOverTicket(ticket.id));
   };
 
   const addSelectedService = (service: ServicePricing) => {
@@ -247,7 +264,10 @@ export const TicketDetails: React.FC = () => {
   const isHistorical = ticket.status === 'CLOSED' || ticket.status === 'REJECTED';
   const isNew = ticket.status === 'NEW';
   const isReady = ticket.status === 'READY';
+  const isFinished = ticket.status === 'CLOSED';
   const isDiagnosis = ticket.status === 'DIAGNOSIS';
+  const isReadOnlyForTechnician = user?.role === 'TECHNICIAN' && ticket.assigned_worker?.id !== user.id;
+  const canEditTicket = !isReadOnlyForTechnician;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -267,12 +287,23 @@ export const TicketDetails: React.FC = () => {
           <p className="mt-1 text-sm text-slate-600">To zgłoszenie jest zamknięte i nie można już zmienić jego danych.</p>
         </section>
       )}
-      {isNew && (
+      {isNew && canEditTicket && (
         <section className="rounded-lg border border-blue-200 bg-blue-50 p-6 shadow-sm">
           <h2 className="text-lg font-bold text-slate-800">Diagnoza</h2>
           <p className="mt-1 text-sm text-slate-600">Rozpoczęcie diagnozy zgłoszenia zmieni jego stan z nowego na "w trakcie diagnozy".</p>
           <button type="button" disabled={saving} onClick={startDiagnosis} className="mt-2 rounded border border-blue-500 bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50">
             Rozpocznij diagnozę
+          </button>
+        </section>
+      )}
+      {isReadOnlyForTechnician && !isHistorical && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-6 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-800">Zgłoszenie tylko do odczytu</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            To zgłoszenie jest przypisane do: {ticket.assigned_worker?.full_name || 'innego pracownika'}.
+          </p>
+          <button type="button" disabled={saving} onClick={takeOver} className="mt-3 rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">
+            Przejmij zgłoszenie
           </button>
         </section>
       )}
@@ -301,13 +332,12 @@ export const TicketDetails: React.FC = () => {
           <p className="whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-3">{ticket.problem_description}</p>
         </div>
         </section>
-      {isDiagnosis && (
+      {isDiagnosis && canEditTicket && (
         <section className="rounded-lg border border-blue-200 bg-blue-50 p-6 shadow-sm">
           <h2 className="text-lg font-bold text-slate-800">Nowe zgłoszenie</h2>
           <p className="mt-1 text-sm text-slate-600">Wykonaj diagnozę, zapisz jej wynik i rozpocznij obsługę zgłoszenia.</p>
           <textarea value={diagnosis} onChange={event => setDiagnosis(event.target.value)} placeholder="Wynik diagnozy" className="mt-4 min-h-32 w-full rounded border border-slate-300 bg-white p-3" />
           <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            {/* <p className="rounded bg-white p-2 text-sm text-slate-700">Szacowany łączny koszt: <b>{estimatedTotal.toFixed(2)} PLN</b></p> */}
             <input
               type="number"
               min="0"
@@ -320,14 +350,14 @@ export const TicketDetails: React.FC = () => {
             <button type="button" disabled={saving} onClick={() => setEstimateModal('service')} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Dodaj usługę</button>
             <button type="button" disabled={saving} onClick={() => setEstimateModal('part')} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Dodaj część</button>
             <button type="button" disabled={saving || !diagnosis.trim()} onClick={saveDiagnosisAndStart} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-              Zapisz diagnozę i zmień status
+              Zapisz diagnozę i rozpocznij naprawę
             </button>
           </div>
           {estimateTable}
         </section>
       )}
 
-      {workStatuses.includes(ticket.status) && (
+      {workStatuses.includes(ticket.status) && canEditTicket && (
         <section className="space-y-5 rounded-lg border border-amber-200 bg-amber-50 p-6 shadow-sm">
           <div>
             <h2 className="text-lg font-bold text-slate-800">Obsługa zgłoszenia</h2>
@@ -368,28 +398,81 @@ export const TicketDetails: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap gap-3">
-            {ticket.status === 'DIAGNOSIS' && <button type="button" disabled={saving} onClick={() => moveStatus('PARTS')} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">Czekaj na części</button>}
-            {(ticket.status === 'DIAGNOSIS' || ticket.status === 'PARTS') && <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Rozpocznij naprawę</button>}
-            {ticket.status === 'IN_PROGRESS' && <button type="button" disabled={saving} onClick={() => moveStatus('READY')} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Gotowe do odbioru</button>}
+            {ticket.status === 'DIAGNOSIS' && <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Rozpocznij naprawę</button>}
+            {ticket.status === 'IN_PROGRESS' && <button type="button" disabled={saving} onClick={() => moveStatus('READY')} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Gotowe do odbioru</button>} 
+            {(ticket.status === 'DIAGNOSIS' || ticket.status === 'IN_PROGRESS') && <button type="button" disabled={saving} onClick={waitForParts} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">Oczekuj na części</button>}
+            {ticket.status === 'PARTS' && <button type="button" disabled={saving} onClick={resumeWork} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">{ticket.status_before_waiting_for_parts === 'DIAGNOSIS' ? 'Wznów diagnozę' : 'Wznów naprawę'}</button>}
+            {/* {(ticket.status === 'DIAGNOSIS' || ticket.status === 'PARTS') && <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Rozpocznij naprawę</button>}*/}
             <button type="button" disabled={saving} onClick={() => moveStatus('REJECTED')} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Odrzuć</button>
           </div>
         </section>
       )}
 
-      {isReady && (
+      {(isReady || isFinished) && (
         <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-800">Gotowe do odbioru</h2>
-          <p className="mt-1 text-sm text-slate-600">Sprawdź podsumowanie i zapisz końcową cenę przed zamknięciem zgłoszenia.</p>
+          <h2 className="text-lg font-bold text-slate-800">{isFinished ? 'Podsumowanie zakończonego zgłoszenia' : 'Gotowe do odbioru'}</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            {isFinished ? 'Poniżej znajdują się części i usługi użyte przy realizacji zgłoszenia.' : 'Sprawdź podsumowanie i zapisz końcową cenę przed zamknięciem zgłoszenia.'}
+          </p>
+          <div className="mt-4 overflow-x-auto rounded border border-slate-200 bg-white">
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Typ</th>
+                  <th className="px-4 py-3 font-semibold">Pozycja</th>
+                  <th className="px-4 py-3 text-right font-semibold">Ilość</th>
+                  <th className="px-4 py-3 text-right font-semibold">Cena</th>
+                  <th className="px-4 py-3 text-right font-semibold">Razem</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {ticket.used_parts.map(ticketPart => (
+                  <tr key={`part-${ticketPart.id}`}>
+                    <td className="px-4 py-3 text-slate-500">Część</td>
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-slate-800">{ticketPart.part.name}</p>
+                      <p className="text-xs text-slate-500">SKU: {ticketPart.part.sku}</p>
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-700">{ticketPart.quantity}</td>
+                    <td className="px-4 py-3 text-right text-slate-700">{ticketPart.price_at_use} PLN</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-800">
+                      {(Number(ticketPart.price_at_use) * ticketPart.quantity).toFixed(2)} PLN
+                    </td>
+                  </tr>
+                ))}
+                {ticket.used_services.map(service => (
+                  <tr key={`service-${service.id}`}>
+                    <td className="px-4 py-3 text-slate-500">Usługa</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{service.name}</td>
+                    <td className="px-4 py-3 text-right text-slate-700">1</td>
+                    <td className="px-4 py-3 text-right text-slate-700">{service.price} PLN</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-800">{service.price} PLN</td>
+                  </tr>
+                ))}
+                {ticket.used_parts.length === 0 && ticket.used_services.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-slate-500">Brak użytych części i usług.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <p><b>Części:</b> {ticket.total_parts_cost}</p>
             <p><b>Usługi:</b> {ticket.total_services_cost}</p>
             <p><b>Razem:</b> {ticket.total_cost}</p>
           </div>
           <textarea readOnly value={ticket.diagnosis_note || 'Brak diagnozy'} className="mt-4 min-h-24 w-full rounded border border-slate-300 bg-white p-3" />
-          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <input type="number" min={ticket.total_cost} step="0.01" value={finalCost} onChange={event => setFinalCost(event.target.value)} placeholder="Końcowa cena" className="rounded border border-slate-300 p-2" />
-            <button type="button" disabled={saving || !finalCost} onClick={closeTicket} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Zamknij zgłoszenie</button>
-          </div>
+          {isReady && (
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+              <label className="flex flex-col gap-1 text-sm text-slate-700">
+                <span>Końcowa cena (PLN)</span>
+                <input type="number" min={ticket.total_cost} placeholder={String(ticket.total_cost)} step="0.01" onChange={event => setFinalCost(event.target.value)} value={finalCost} className="w-full rounded border border-slate-300 p-2" />
+              </label>
+              <button type="button" disabled={saving} onClick={closeTicket} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Zamknij zgłoszenie</button>
+              <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Cofnij gotowość</button>
+            </div>
+          )}
         </section>
       )}
 

@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from phonenumber_field.modelfields import PhoneNumberField
+from django.core.exceptions import ValidationError
 
 class Voivodeship(models.Model):
     code = models.CharField(max_length=2, unique=True)
@@ -35,13 +36,54 @@ class Location(models.Model):
     email = models.EmailField(blank=True)
     is_active = models.BooleanField(default=True)
 
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new:
+            LocationOpeningHours.objects.bulk_create([
+                LocationOpeningHours(location=self, weekday=weekday, is_closed=True)
+                for weekday, _ in LocationOpeningHours.Weekday.choices
+            ])
+
     def __str__(self):
         return f"{self.name} - {self.city.name}"
 
+
+class LocationOpeningHours(models.Model):
+    class Weekday(models.IntegerChoices):
+        MONDAY = 0, 'Poniedziałek'
+        TUESDAY = 1, 'Wtorek'
+        WEDNESDAY = 2, 'Środa'
+        THURSDAY = 3, 'Czwartek'
+        FRIDAY = 4, 'Piątek'
+
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='opening_hours')
+    weekday = models.PositiveSmallIntegerField(choices=Weekday.choices)
+    opens_at = models.TimeField(null=True, blank=True)
+    closes_at = models.TimeField(null=True, blank=True)
+    is_closed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['weekday']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['location', 'weekday'],
+                name='unique_location_opening_hours_day',
+            ),
+        ]
+
+    def clean(self):
+        if self.is_closed:
+            return
+        if not self.opens_at or not self.closes_at:
+            raise ValidationError('Godziny otwarcia muszą zawierać początek i koniec.')
+        if self.closes_at <= self.opens_at:
+            raise ValidationError('Godzina zamknięcia musi być późniejsza niż godzina otwarcia.')
+
 class CustomUser(AbstractUser):
     class Role(models.TextChoices):
-        OWNER = 'OWNER', 'Szef firmy'
-        MANAGER = 'MANAGER', 'Kierownik serwisu'
+        OWNER = 'OWNER', 'Szefostwo firmy'
+        MANAGER = 'MANAGER', 'Kierownictwo serwisu'
         TECHNICIAN = 'TECHNICIAN', 'Serwisant'
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.TECHNICIAN)
     location = models.ForeignKey(Location,on_delete=models.SET_NULL,null=True,blank=True,related_name='employees')

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api from '../../api/axios';
-import type { Branch, City } from '../../types/auth';
+import type { Branch, City, OpeningHours } from '../../types/auth';
 
 interface BranchModalProps {
   isOpen: boolean;
@@ -18,6 +18,10 @@ interface BranchFormData {
   email: string;
   is_active: boolean;
 }
+
+const weekdays = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek'];
+const emptyOpeningHours = (): Array<Partial<OpeningHours> & { weekday: number }> =>
+  weekdays.map((_, weekday) => ({ weekday, opens_at: '', closes_at: '', is_closed: true }));
 
 const emptyForm: BranchFormData = {
   name: '',
@@ -42,6 +46,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const [isSearchingCities, setIsSearchingCities] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openingHours, setOpeningHours] = useState(emptyOpeningHours);
   const cityFieldRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,10 +62,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       });
       setSelectedCity(branchToEdit.city);
       setCityQuery(branchToEdit.city.name);
+      setOpeningHours(branchToEdit.opening_hours.map(hours => ({
+        id: hours.id,
+        weekday: hours.weekday,
+        opens_at: hours.opens_at?.slice(0, 5) || '',
+        closes_at: hours.closes_at?.slice(0, 5) || '',
+        is_closed: hours.is_closed,
+      })));
     } else {
       setFormData(emptyForm);
       setSelectedCity(null);
       setCityQuery('');
+      setOpeningHours(emptyOpeningHours());
     }
     setCitySuggestions([]);
     setError(null);
@@ -125,6 +138,12 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     return fallback;
   };
 
+  const updateOpeningHours = (weekday: number, field: 'opens_at' | 'closes_at' | 'is_closed', value: string | boolean) => {
+    setOpeningHours(current => current.map(hours => (
+      hours.weekday === weekday ? { ...hours, [field]: value } : hours
+    )));
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setIsSubmitting(true);
@@ -142,11 +161,35 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     };
 
     try {
+      let locationId = branchToEdit?.id;
       if (branchToEdit) {
         await api.patch(`/accounts/locations/${branchToEdit.id}/`, payload);
       } else {
-        await api.post('/accounts/locations/', payload);
+        const response = await api.post<Branch>('/accounts/locations/', payload);
+        locationId = response.data.id;
       }
+
+      let rows = openingHours;
+      if (!branchToEdit && locationId) {
+        const hoursResponse = await api.get<OpeningHours[]>('/accounts/opening-hours/', {
+          params: { location: locationId },
+        });
+        rows = hoursResponse.data.map(hours => ({
+          id: hours.id,
+          weekday: hours.weekday,
+          opens_at: openingHours.find(item => item.weekday === hours.weekday)?.opens_at || '',
+          closes_at: openingHours.find(item => item.weekday === hours.weekday)?.closes_at || '',
+          is_closed: openingHours.find(item => item.weekday === hours.weekday)?.is_closed ?? true,
+        }));
+      }
+      await Promise.all(rows.filter(hours => hours.id).map(hours => api.patch(
+        `/accounts/opening-hours/${hours.id}/`,
+        {
+          opens_at: hours.is_closed ? null : hours.opens_at || null,
+          closes_at: hours.is_closed ? null : hours.closes_at || null,
+          is_closed: hours.is_closed,
+        },
+      )));
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -236,6 +279,20 @@ export const BranchModal: React.FC<BranchModalProps> = ({
               Lokalizacja aktywna
             </label>
           )}
+          <div className="space-y-2 border-t pt-3">
+            <h3 className="text-sm font-semibold text-slate-700">Godziny otwarcia</h3>
+            {openingHours.map(hours => (
+              <div key={hours.weekday} className="grid grid-cols-[7rem_1fr_1fr_auto] items-center gap-2 text-sm">
+                <span className="text-slate-700">{weekdays[hours.weekday]}</span>
+                <input type="time" value={hours.opens_at || ''} disabled={Boolean(hours.is_closed)} onChange={event => updateOpeningHours(hours.weekday, 'opens_at', event.target.value)} className="rounded border border-slate-300 p-1.5 disabled:bg-slate-100" />
+                <input type="time" value={hours.closes_at || ''} disabled={Boolean(hours.is_closed)} onChange={event => updateOpeningHours(hours.weekday, 'closes_at', event.target.value)} className="rounded border border-slate-300 p-1.5 disabled:bg-slate-100" />
+                <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-600">
+                  <input type="checkbox" checked={Boolean(hours.is_closed)} onChange={event => updateOpeningHours(hours.weekday, 'is_closed', event.target.checked)} />
+                  Zamknięte
+                </label>
+              </div>
+            ))}
+          </div>
           <div className="flex justify-end gap-2 pt-4 border-t">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Anuluj</button>
             <button type="submit" disabled={isSubmitting} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">

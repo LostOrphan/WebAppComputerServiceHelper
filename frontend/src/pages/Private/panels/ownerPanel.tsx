@@ -35,14 +35,14 @@ const tiles: ManagementTile[] = [
     path: '/work/admin/company/warehouses',
     color: 'bg-amber-50 text-amber-600',
   },
-  {
-    id: 'orders',
-    title: 'Zlecenia Serwisowe',
-    description: 'Przeglądaj zlecenia serwisowe',
-    icon: '',
-    path: '/work/admin/company/orders',
-    color: 'bg-purple-50 text-purple-600',
-  },
+  // {
+  //   id: 'orders',
+  //   title: 'Zlecenia Serwisowe',
+  //   description: 'Przeglądaj zlecenia serwisowe',
+  //   icon: '',
+  //   path: '/work/admin/company/orders',
+  //   color: 'bg-purple-50 text-purple-600',
+  // },
   {
     id: 'services',
     title: 'Cennik usług',
@@ -52,14 +52,6 @@ const tiles: ManagementTile[] = [
     color: 'bg-cyan-50 text-cyan-600',
   },
 
-  // {
-  //   id: 'settings',
-  //   title: 'Ustawienia Oddziału',
-  //   description: 'Dane adresowe i godziny otwarcia',
-  //   icon: '⚙️',
-  //   path: '/admin/branch/settings',
-  //   color: 'bg-slate-100 text-slate-700',
-  // },
 ];
 
 export const OwnerPanel: React.FC = () => {

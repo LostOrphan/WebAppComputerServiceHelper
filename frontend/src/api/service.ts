@@ -3,6 +3,7 @@ import type {
   ClientOption,
   LocationServicePrice,
   PartOption,
+  PublicTicketSummary,
   ServicePricing,
   Ticket,
   TicketStatus,
@@ -21,6 +22,17 @@ export const getTickets = async (search?: string, statuses?: TicketStatus[]) => 
 export const getTicket = async (id: number) =>
   (await api.get<Ticket>(`service/tickets/${id}/`)).data;
 
+export const requestPublicTrackingCode = async (email: string) =>
+  (await api.post<{ detail: string }>('service/public-track/request-code/', { email })).data;
+
+export const verifyPublicTrackingCode = async (email: string, code: string) =>
+  (await api.post<{ tracking_token: string }>('service/public-track/verify-code/', { email, code })).data;
+
+export const getPublicTickets = async (trackingToken: string) =>
+  (await api.post<PublicTicketSummary[]>('service/public-track/tickets/', {
+    tracking_token: trackingToken,
+  })).data;
+
 export const createTicket = async (data: {
   client: number;
   location: number;
@@ -33,8 +45,17 @@ export const createTicket = async (data: {
 export const claimTicket = async (id: number) =>
   (await api.post<Ticket>(`service/tickets/${id}/claim/`)).data;
 
+export const takeOverTicket = async (id: number) =>
+  (await api.post<Ticket>(`service/tickets/${id}/take-over/`)).data;
+
 export const changeTicketStatus = async (id: number, status: TicketStatus, comment?: string) =>
   (await api.post<Ticket>(`service/tickets/${id}/change-status/`, { status, comment })).data;
+
+export const waitForTicketParts = async (id: number, comment?: string) =>
+  (await api.post<Ticket>(`service/tickets/${id}/wait-for-parts/`, { comment })).data;
+
+export const resumeTicketWork = async (id: number, comment?: string) =>
+  (await api.post<Ticket>(`service/tickets/${id}/resume-work/`, { comment })).data;
 
 export const updateTicket = async (id: number, data: { diagnosis_note?: string; estimated_cost?: string }) =>
   (await api.patch<Ticket>(`service/tickets/${id}/`, data)).data;

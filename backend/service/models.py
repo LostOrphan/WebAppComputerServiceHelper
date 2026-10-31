@@ -2,6 +2,7 @@ import uuid
 from django.db import models
 from django.conf import settings
 from django.db.models import Q
+from django.utils import timezone
 from django.core.validators import MinValueValidator
 from accounts.models import Location
 class Ticket(models.Model):
@@ -37,6 +38,12 @@ class Ticket(models.Model):
     diagnosis_note = models.TextField(blank=True)
 
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW)
+    status_before_waiting_for_parts = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        null=True,
+        blank=True,
+    )
     estimated_cost = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     final_cost = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
 
@@ -46,9 +53,9 @@ class Ticket(models.Model):
     ALLOWED_STATUS_TRANSITIONS = {
         Status.NEW: {Status.DIAGNOSIS, Status.REJECTED},
         Status.DIAGNOSIS: {Status.IN_PROGRESS, Status.WAITING_FOR_PARTS, Status.REJECTED},
-        Status.WAITING_FOR_PARTS: {Status.IN_PROGRESS, Status.REJECTED},
+        Status.WAITING_FOR_PARTS: {Status.DIAGNOSIS, Status.IN_PROGRESS, Status.REJECTED},
         Status.IN_PROGRESS: {Status.READY, Status.WAITING_FOR_PARTS, Status.REJECTED},
-        Status.READY: {Status.CLOSED},
+        Status.READY: {Status.CLOSED, Status.IN_PROGRESS},
         Status.CLOSED: set(),
         Status.REJECTED: set(),
     }
@@ -107,7 +114,7 @@ class TicketStatusHistory(models.Model):
     comment = models.TextField(blank=True)
 
     class Meta:
-        ordering = ['changed_at'] 
+        ordering = ['-changed_at']
 
     def __str__(self):
         return f"{self.ticket.ticket_code} -> {self.get_status_display()} ({self.changed_at.strftime('%Y-%m-%d %H:%M')})"
@@ -140,6 +147,23 @@ class TicketAssignmentHistory(models.Model):
         related_name="ticket_assignment_history",
     )
     assigned_at = models.DateTimeField(auto_now_add=True)
+
+
+class PublicEmailVerification(models.Model):
+    email = models.EmailField()
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    used_at = models.DateTimeField(null=True, blank=True)
+    request_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
 
 class ServicePricing(models.Model):
     name = models.CharField(max_length=150, unique=True)

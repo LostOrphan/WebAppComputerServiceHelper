@@ -51,6 +51,7 @@ export interface Ticket {
   problem_description: string;
   diagnosis_note: string;
   status: TicketStatus;
+  status_before_waiting_for_parts: TicketStatus | null;
   status_display: string;
   estimated_cost: string | null;
   final_cost: string | null;
@@ -97,4 +98,15 @@ export interface LocationServicePrice {
   custom_price: string | null;
   is_available: boolean;
   effective_price: string;
+}
+
+export interface PublicTicketSummary {
+  id: number;
+  ticket_code: string;
+  device_name: string;
+  status: TicketStatus;
+  status_display: string;
+  location_name: string;
+  created_at: string;
+  updated_at: string;
 }

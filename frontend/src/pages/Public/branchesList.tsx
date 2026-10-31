@@ -46,14 +46,18 @@ export const BranchesList: React.FC = () => {
                 <div>{branch.postal_code} {branch.city.name}</div>
               </address>
               
-              <h2 className="text-lg font-semibold text-slate-900">Godziny otwarcia</h2>
-              <div className="mt-2 flex items-center gap-16 justify-left">
-                <div className="flex flex-col">
-                  <span className="font-medium text-slate-800">Poniedziałek - Piątek</span>
-                  <span className="text-slate-600">08:30 - 16:30</span>
-                  <span className="text-slate-600">Sobota - Niedziela</span>
-                  <span className="text-slate-600">Nieczynne</span>
-                </div>
+              <h2 className="mt-5 text-lg font-semibold text-slate-900">Godziny otwarcia</h2>
+              <div className="mt-2 space-y-1 text-sm">
+                {branch.opening_hours?.map(hours => (
+                  <div key={hours.id} className="grid grid-cols-[7rem_1fr] gap-3">
+                    <span className="font-medium text-slate-800">{hours.weekday_name}</span>
+                    <span className="text-slate-600">
+                      {hours.is_closed || !hours.opens_at || !hours.closes_at
+                        ? 'Nieczynne'
+                        : `${hours.opens_at.slice(0, 5)} - ${hours.closes_at.slice(0, 5)}`}
+                    </span>
+                  </div>
+                ))}
               </div>
               <h2 className="text-lg font-semibold text-slate-900">Kontakt</h2>
 

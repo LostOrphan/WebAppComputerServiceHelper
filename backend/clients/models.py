@@ -5,7 +5,8 @@ class Client(models.Model):
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
     phone_number = PhoneNumberField(unique=True,null=True,blank=True)
-    email = models.EmailField(blank=True,null=True)
+    # Aktualna implementacja pozwalająca na sprawdzanie stanu zgłoszeń wymaga istnienie adresu email, wprwowadzenie sprawdania po sms pozwala na zmianę na opcjonalny
+    email = models.EmailField()
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

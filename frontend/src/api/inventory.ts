@@ -23,6 +23,14 @@ export const getCategories=async()=>{
     const response = await api.get<PartCategory[]>('inventory/categories/');
     return response.data;
 }
+export const createCategory = async (name: string) =>
+  (await api.post<PartCategory>('inventory/categories/', { name })).data;
+
+export const updateCategory = async (id: number, name: string) =>
+  (await api.patch<PartCategory>(`inventory/categories/${id}/`, { name })).data;
+
+export const deleteCategory = async (id: number) =>
+  api.delete(`inventory/categories/${id}/`);
 
 export const createPart = async (data: CreatePartPayload) => {
   const response = await api.post<Part>('inventory/parts/', data);

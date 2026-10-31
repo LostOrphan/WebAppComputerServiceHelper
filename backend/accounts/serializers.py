@@ -1,6 +1,6 @@
 from rest_framework import  serializers
 from django.contrib.auth import get_user_model
-from .models import City, Location
+from .models import City, Location, LocationOpeningHours
 
 User = get_user_model()
 
@@ -19,10 +19,31 @@ class CitySerializer(serializers.ModelSerializer):
 
 class LocationReadSerializer(serializers.ModelSerializer):
     city = CitySerializer(read_only=True)
+    opening_hours = serializers.SerializerMethodField()
 
     class Meta:
         model = Location
-        fields = ['id','name','address','postal_code','city','phone_number','email','is_active']
+        fields = ['id','name','address','postal_code','city','phone_number','email','is_active','opening_hours']
+
+    def get_opening_hours(self, obj):
+        return LocationOpeningHoursSerializer(obj.opening_hours.all(), many=True).data
+
+
+class LocationOpeningHoursSerializer(serializers.ModelSerializer):
+    weekday_name = serializers.CharField(source='get_weekday_display', read_only=True)
+
+    class Meta:
+        model = LocationOpeningHours
+        fields = ['id', 'location', 'weekday', 'weekday_name', 'opens_at', 'closes_at', 'is_closed']
+        read_only_fields = ['id', 'location', 'weekday', 'weekday_name']
+
+    def validate(self, attrs):
+        is_closed = attrs.get('is_closed', self.instance.is_closed if self.instance else False)
+        opens_at = attrs.get('opens_at', self.instance.opens_at if self.instance else None)
+        closes_at = attrs.get('closes_at', self.instance.closes_at if self.instance else None)
+        if not is_closed and (not opens_at or not closes_at or closes_at <= opens_at):
+            raise serializers.ValidationError('Podaj poprawny przedział godzin albo oznacz dzień jako zamknięty.')
+        return attrs
 
 class LocationWriteSerializer(serializers.ModelSerializer):
     class Meta:

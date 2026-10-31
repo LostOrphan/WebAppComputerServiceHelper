@@ -1,12 +1,15 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import check_password
 from rest_framework.test import APITestCase
 
 from accounts.models import City, Location, Voivodeship
 from clients.models import Client
 from inventory.models import PartCategory, Part, Stock
 from .models import (
+	PublicEmailVerification,
 	Ticket,
 	TicketAssignmentHistory,
 	TicketPart,
@@ -142,6 +145,49 @@ class ServiceTests(APITestCase):
 		self.assertEqual(ticket.assigned_worker, self.user)
 		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
 
+	def test_technician_can_take_over_ticket_and_audit_it(self):
+		other_worker = User.objects.create_user(
+			username='other-technician', password='password',
+			role=User.Role.TECHNICIAN, location=self.location,
+		)
+		ticket = Ticket.objects.create(
+			client=self.client_record,
+			location=self.location,
+			assigned_worker=other_worker,
+			device_name='Laptop',
+			problem_description='Nie uruchamia sie',
+		)
+		self.client.force_authenticate(self.user)
+
+		response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/take-over/',
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		ticket.refresh_from_db()
+		self.assertEqual(ticket.assigned_worker, self.user)
+		history = ticket.status_history.order_by('-changed_at').first()
+		self.assertEqual(history.changed_by, self.user)
+		self.assertEqual(history.comment, 'technician przejął zgłoszenie')
+
+	def test_unassigned_technician_cannot_modify_ticket(self):
+		ticket = Ticket.objects.create(
+			client=self.client_record,
+			location=self.location,
+			device_name='Laptop',
+			problem_description='Nie uruchamia sie',
+		)
+		self.client.force_authenticate(self.user)
+
+		response = self.client.patch(
+			f'/api/service/tickets/{ticket.pk}/',
+			{'diagnosis_note': 'Nieautoryzowana zmiana'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 403)
+
 	def test_generic_update_cannot_change_status_or_assignment(self):
 		ticket = self.create_ticket()
 
@@ -175,6 +221,66 @@ class ServiceTests(APITestCase):
 
 		self.assertEqual(response.status_code, 409)
 
+	def test_waiting_for_parts_remembers_diagnosis_and_resume_does_not_duplicate(self):
+		ticket = self.create_ticket()
+		self.client.force_authenticate(self.user)
+
+		first_response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/change-status/',
+			{'status': Ticket.Status.DIAGNOSIS},
+			format='json',
+		)
+		self.assertEqual(first_response.status_code, 200)
+		second_response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/wait-for-parts/',
+			format='json',
+		)
+		self.assertEqual(second_response.status_code, 200)
+		self.assertEqual(second_response.data['status_before_waiting_for_parts'], Ticket.Status.DIAGNOSIS)
+		history_count = ticket.status_history.count()
+		self.assertEqual(
+			list(ticket.status_history.order_by('changed_at').values_list('status', flat=True)),
+			[Ticket.Status.NEW, Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS],
+		)
+
+		third_response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/resume-work/',
+			format='json',
+		)
+		self.assertEqual(third_response.status_code, 200)
+		ticket.refresh_from_db()
+		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
+		self.assertIsNone(ticket.status_before_waiting_for_parts)
+		self.assertEqual(ticket.status_history.count(), history_count + 1)
+
+	def test_waiting_for_parts_resumes_repair(self):
+		ticket = self.create_ticket()
+		self.client.force_authenticate(self.user)
+
+		self.client.post(
+			f'/api/service/tickets/{ticket.pk}/change-status/',
+			{'status': Ticket.Status.DIAGNOSIS},
+			format='json',
+		)
+		self.client.post(
+			f'/api/service/tickets/{ticket.pk}/change-status/',
+			{'status': Ticket.Status.IN_PROGRESS},
+			format='json',
+		)
+		wait_response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/wait-for-parts/',
+			format='json',
+		)
+		self.assertEqual(wait_response.status_code, 200)
+		self.assertEqual(wait_response.data['status_before_waiting_for_parts'], Ticket.Status.IN_PROGRESS)
+
+		resume_response = self.client.post(
+			f'/api/service/tickets/{ticket.pk}/resume-work/',
+			format='json',
+		)
+		self.assertEqual(resume_response.status_code, 200)
+		self.assertEqual(resume_response.data['status'], Ticket.Status.IN_PROGRESS)
+
 	def test_inactive_location_user_cannot_change_ticket_status(self):
 		ticket = self.create_ticket()
 		ticket.location = self.inactive_location
@@ -207,6 +313,42 @@ class ServiceTests(APITestCase):
 			'phone_number': '+48500100201',
 		}, format='json')
 		self.assertEqual(wrong_phone.status_code, 404)
+
+	def test_public_email_verification_returns_client_tickets(self):
+		self.client_record.email = 'jan@example.com'
+		self.client_record.save(update_fields=['email'])
+		ticket = self.create_ticket()
+
+		with patch('service.views.secrets.randbelow', return_value=123456):
+			request_response = self.client.post(
+				'/api/service/public-track/request-code/',
+				{'email': 'JAN@example.com'},
+				format='json',
+			)
+
+		self.assertEqual(request_response.status_code, 202)
+		verification = PublicEmailVerification.objects.get(email='jan@example.com')
+		self.assertTrue(check_password('123456', verification.code_hash))
+
+		verify_response = self.client.post(
+			'/api/service/public-track/verify-code/',
+			{'email': 'jan@example.com', 'code': '123456'},
+			format='json',
+		)
+
+		self.assertEqual(verify_response.status_code, 200)
+		list_response = self.client.post(
+			'/api/service/public-track/tickets/',
+			{'tracking_token': verify_response.data['tracking_token']},
+			format='json',
+		)
+
+		self.assertEqual(list_response.status_code, 200)
+		self.assertEqual(list_response.data[0]['id'], ticket.id)
+		self.assertEqual(list_response.data[0]['status'], Ticket.Status.NEW)
+		self.assertEqual(list_response.data[0]['location_name'], self.location.name)
+		self.assertIn('created_at', list_response.data[0])
+		self.assertIn('updated_at', list_response.data[0])
 
 	def test_final_cost_cannot_be_lower_than_used_parts(self):
 		ticket = self.create_ticket()

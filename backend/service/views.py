@@ -3,9 +3,18 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
-from .models import Ticket, TicketPart, TicketService, ServicePricing, LocationServicePrice
+from django.conf import settings
+from django.core import signing
+from django.core.mail import send_mail
+from django.contrib.auth.hashers import check_password, make_password
+from django.utils import timezone
+from datetime import timedelta
+import secrets
+import smtplib
+from .models import PublicEmailVerification, Ticket, TicketPart, TicketService, TicketStatusHistory, ServicePricing, LocationServicePrice
 from .serializers import (
     TicketStatusHistorySerializer,
     ServiceReadSerializer,
@@ -20,10 +29,17 @@ from .serializers import (
     TicketPartReadSerializer,
     TicketPartWriteSerializer,
     TicketServiceSerializer,
+    PublicEmailRequestSerializer,
+    PublicEmailVerifySerializer,
+    PublicTicketSummarySerializer,
     PublicTicketStatusSerializer,
 )
 from inventory.models import Stock
 from accounts.permissions import HasActiveLocation, IsOwner, IsOwnerOrManager
+
+
+def technician_can_edit_ticket(user, ticket):
+    return user.role != 'TECHNICIAN' or ticket.assigned_worker_id == user.id
 
 class TicketView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
@@ -81,6 +97,8 @@ class TicketView(viewsets.ModelViewSet):
         comment = serializer.validated_data.pop('comment','Utworzenie zgłoszenia w systemie')
         serializer.save(user=self.request.user, created_by=self.request.user, comment=comment)
     def perform_update(self, serializer):
+        if not technician_can_edit_ticket(self.request.user, serializer.instance):
+            raise PermissionDenied('Tylko przypisany pracownik może modyfikować to zgłoszenie.')
         comment = serializer.validated_data.pop('comment','')
         serializer.save(user=self.request.user, comment=comment)
 
@@ -88,10 +106,18 @@ class TicketView(viewsets.ModelViewSet):
     @transaction.atomic
     def change_status(self,request,pk=None):
         ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
-        if request.user.role == 'TECHNICIAN' and ticket.assigned_worker_id != request.user.id:
+        if not technician_can_edit_ticket(request.user, ticket):
             return Response({"detail": "Tylko przypisany pracownik może zmienić status."}, status=status.HTTP_403_FORBIDDEN)
         new_status = request.data.get('status')
         comment = request.data.get('comment','')
+        if new_status == Ticket.Status.WAITING_FOR_PARTS or (
+            ticket.status == Ticket.Status.WAITING_FOR_PARTS
+            and new_status in [Ticket.Status.DIAGNOSIS, Ticket.Status.IN_PROGRESS]
+        ):
+            return Response(
+                {"detail": "Użyj dedykowanej akcji oczekiwania lub wznowienia zgłoszenia."},
+                status=status.HTTP_409_CONFLICT,
+            )
         if not new_status or new_status not in Ticket.Status.values:
             return Response({"detail": "Wybrany status jest nieprawidłowy"},status=status.HTTP_400_BAD_REQUEST)
         if not ticket.can_transition_to(new_status):
@@ -101,6 +127,52 @@ class TicketView(viewsets.ModelViewSet):
             )
         ticket.status = new_status
         ticket.save(user=request.user, comment=comment)
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='wait-for-parts')
+    @transaction.atomic
+    def wait_for_parts(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response({"detail": "Tylko przypisany pracownik może zmienić status."}, status=status.HTTP_403_FORBIDDEN)
+        if ticket.status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.IN_PROGRESS]:
+            return Response(
+                {"detail": "Na części można oczekiwać tylko podczas diagnozy lub naprawy."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        ticket.status_before_waiting_for_parts = ticket.status
+        ticket.status = Ticket.Status.WAITING_FOR_PARTS
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Zgłoszenie oczekuje na części'))
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='resume-work')
+    @transaction.atomic
+    def resume_work(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response({"detail": "Tylko przypisany pracownik może wznowić zgłoszenie."}, status=status.HTTP_403_FORBIDDEN)
+        if ticket.status != Ticket.Status.WAITING_FOR_PARTS:
+            return Response(
+                {"detail": "Wznowić można tylko zgłoszenie oczekujące na części."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        previous_status = ticket.status_before_waiting_for_parts
+        if previous_status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.IN_PROGRESS]:
+            previous_history = ticket.status_history.exclude(
+                status=Ticket.Status.WAITING_FOR_PARTS,
+            ).order_by('-changed_at').first()
+            previous_status = previous_history.status if previous_history else None
+        if previous_status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.IN_PROGRESS]:
+            return Response(
+                {"detail": "Nie można ustalić poprzedniego etapu zgłoszenia."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        ticket.status = previous_status
+        ticket.status_before_waiting_for_parts = None
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Wznowiono obsługę zgłoszenia'))
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -121,7 +193,34 @@ class TicketView(viewsets.ModelViewSet):
 
         ticket.assigned_worker = request.user
         ticket.status = Ticket.Status.DIAGNOSIS
-        ticket.save(user=request.user, comment=request.data.get('comment', 'Pracownik przyjął zgłoszenie'))
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Pracownik przejął zgłoszenie'))
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='take-over')
+    @transaction.atomic
+    def take_over(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+        if request.user.role != 'TECHNICIAN':
+            return Response(
+                {"detail": "Tylko serwisant może przejąć zgłoszenie."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if ticket.status in [Ticket.Status.CLOSED, Ticket.Status.REJECTED]:
+            return Response(
+                {"detail": "Nie można przejąć zakończonego zgłoszenia."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        ticket.assigned_worker = request.user
+        actor_name = request.user.get_full_name() or request.user.username
+        comment = f"{actor_name} przejął zgłoszenie"
+        ticket.save(user=request.user, comment=comment)
+        TicketStatusHistory.objects.create(
+            ticket=ticket,
+            status=ticket.status,
+            changed_by=request.user,
+            comment=comment,
+        )
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
 class TicketPartView(viewsets.ModelViewSet):
@@ -145,11 +244,18 @@ class TicketPartView(viewsets.ModelViewSet):
             return TicketPartReadSerializer
         return TicketPartWriteSerializer
 
+    def perform_update(self, serializer):
+        if not technician_can_edit_ticket(self.request.user, serializer.instance.ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może modyfikować części.')
+        serializer.save()
+
     @transaction.atomic
     def perform_create(self, serializer):
         ticket = serializer.validated_data['ticket']
+        if not technician_can_edit_ticket(self.request.user, ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może dodawać części.')
         if self.request.user.role != 'OWNER' and ticket.location_id != self.request.user.location_id:
-            raise permissions.PermissionDenied('Nie możesz dodać części do zgłoszenia z innej lokalizacji.')
+            raise PermissionDenied('Nie możesz dodać części do zgłoszenia z innej lokalizacji.')
         ticket_part = serializer.save()
 
         stock = Stock.objects.select_for_update().filter(location=ticket_part.ticket.location,part=ticket_part.part).first()
@@ -162,6 +268,8 @@ class TicketPartView(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_destroy(self, instance):
+        if not technician_can_edit_ticket(self.request.user, instance.ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może usuwać części.')
         stock = Stock.objects.select_for_update().filter(
             location=instance.ticket.location,
             part=instance.part,
@@ -188,15 +296,24 @@ class TicketServiceView(viewsets.ModelViewSet):
             return queryset.filter(ticket__location=user.location)
         return TicketService.objects.none()
 
+    def perform_update(self, serializer):
+        if not technician_can_edit_ticket(self.request.user, serializer.instance.ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może modyfikować usługi.')
+        serializer.save()
+
     def perform_create(self, serializer):
         ticket = serializer.validated_data['ticket']
+        if not technician_can_edit_ticket(self.request.user, ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może dodawać usługi.')
         if ticket.status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS, Ticket.Status.IN_PROGRESS]:
             raise serializers.ValidationError('Usługi można dodawać tylko podczas realizacji zgłoszenia.')
         if self.request.user.role != 'OWNER' and ticket.location_id != self.request.user.location_id:
-            raise permissions.PermissionDenied('Nie możesz dodać usługi do zgłoszenia z innej lokalizacji.')
+            raise PermissionDenied('Nie możesz dodać usługi do zgłoszenia z innej lokalizacji.')
         serializer.save()
 
     def perform_destroy(self, instance):
+        if not technician_can_edit_ticket(self.request.user, instance.ticket):
+            raise PermissionDenied('Tylko przypisany pracownik może usuwać usługi.')
         if instance.ticket.status not in [Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS, Ticket.Status.IN_PROGRESS]:
             raise serializers.ValidationError('Usługi można usuwać tylko podczas realizacji zgłoszenia.')
         instance.delete()
@@ -236,6 +353,111 @@ class PublicTicketStatusView(GenericAPIView):
             "updated_at": ticket.updated_at,
             "history": TicketStatusHistorySerializer(ticket.status_history.all(), many=True).data
         })
+
+
+class PublicEmailCodeRequestView(GenericAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = PublicEmailRequestSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email'].strip().lower()
+        now = timezone.now()
+        request_ip = request.META.get('REMOTE_ADDR')
+        generic_response = {
+            'detail': 'Jeśli dla tego adresu istnieją zgłoszenia, wyślemy kod weryfikacyjny.'
+        }
+
+        recent_email_requests = PublicEmailVerification.objects.filter(
+            email=email,
+            created_at__gte=now - timedelta(hours=1),
+        ).count()
+        recent_ip_requests = PublicEmailVerification.objects.filter(
+            request_ip=request_ip,
+            created_at__gte=now - timedelta(hours=1),
+        ).count()
+        if recent_email_requests >= 5 or recent_ip_requests >= 20:
+            return Response(generic_response, status=status.HTTP_202_ACCEPTED)
+
+        if not Ticket.objects.filter(client__email__iexact=email).exists():
+            return Response(generic_response, status=status.HTTP_202_ACCEPTED)
+
+        code = f'{secrets.randbelow(1_000_000):06d}'
+        verification = PublicEmailVerification.objects.create(
+            email=email,
+            code_hash=make_password(code),
+            expires_at=now + timedelta(minutes=10),
+            request_ip=request_ip,
+        )
+        try:
+            send_mail(
+                subject='Kod dostępu do zgłoszeń serwisowych',
+                message=f'Twój kod weryfikacyjny to: {code}. Kod jest ważny przez 10 minut.',
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+                recipient_list=[email],
+                fail_silently=False,
+            )
+        except (OSError, smtplib.SMTPException):
+            verification.delete()
+            return Response(
+                {'detail': 'Nie udało się wysłać wiadomości e-mail. Spróbuj ponownie później.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(generic_response, status=status.HTTP_202_ACCEPTED)
+
+
+class PublicEmailCodeVerifyView(GenericAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = PublicEmailVerifySerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email'].strip().lower()
+        code = serializer.validated_data['code']
+        now = timezone.now()
+
+        verification = PublicEmailVerification.objects.filter(
+            email=email,
+            used_at__isnull=True,
+            expires_at__gt=now,
+        ).first()
+        if not verification or verification.attempts >= 5:
+            return Response({'detail': 'Nieprawidłowy lub wygasły kod.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not check_password(code, verification.code_hash):
+            verification.attempts += 1
+            verification.save(update_fields=['attempts'])
+            return Response({'detail': 'Nieprawidłowy lub wygasły kod.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        verification.used_at = now
+        verification.save(update_fields=['used_at'])
+        tracking_token = signing.dumps({'email': email}, salt='public-ticket-tracking')
+        return Response({'tracking_token': tracking_token}, status=status.HTTP_200_OK)
+
+
+class PublicTicketListView(GenericAPIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        tracking_token = request.data.get('tracking_token')
+        if not tracking_token:
+            return Response({'detail': 'Brak tokenu śledzenia.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            payload = signing.loads(
+                tracking_token,
+                salt='public-ticket-tracking',
+                max_age=15 * 60,
+            )
+        except signing.BadSignature:
+            return Response({'detail': 'Token śledzenia jest nieprawidłowy lub wygasł.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        tickets = Ticket.objects.filter(
+            client__email__iexact=payload['email'],
+        ).select_related('location').order_by('-updated_at')
+        return Response(PublicTicketSummarySerializer(tickets, many=True).data)
 
 class ServiceView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]

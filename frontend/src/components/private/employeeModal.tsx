@@ -172,8 +172,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 className="w-full border rounded-lg p-2 text-sm"
               >
                 <option value="TECHNICIAN">Serwisant</option>
-                <option value="MANAGER">Kierownik</option>
-                <option value="OWNER">Szef firmy</option>
+                <option value="MANAGER">Kierownictwo wydziału</option>
+                <option value="OWNER">Szefostwo firmy</option>
               </select>
             </div>
 

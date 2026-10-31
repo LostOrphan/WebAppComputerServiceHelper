@@ -5,6 +5,9 @@ from .views import (
     TicketPartView,
     TicketServiceView,
     PublicTicketStatusView,
+    PublicEmailCodeRequestView,
+    PublicEmailCodeVerifyView,
+    PublicTicketListView,
     ServiceView,
     LocationServicePriceView,
 )
@@ -18,5 +21,8 @@ router.register(r'location-service-prices', LocationServicePriceView, basename='
 
 urlpatterns = [
     path('public-status/', PublicTicketStatusView.as_view(), name='public-ticket-status'),
+    path('public-track/request-code/', PublicEmailCodeRequestView.as_view(), name='public-track-request-code'),
+    path('public-track/verify-code/', PublicEmailCodeVerifyView.as_view(), name='public-track-verify-code'),
+    path('public-track/tickets/', PublicTicketListView.as_view(), name='public-track-tickets'),
     path('', include(router.urls)),
 ]

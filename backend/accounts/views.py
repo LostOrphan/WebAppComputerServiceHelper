@@ -4,12 +4,13 @@ from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import City, Location
+from .models import City, Location, LocationOpeningHours
 from .permissions import IsOwner, IsOwnerOrManager, IsOwnerOrReadOnly
 from .serializers import (
     CitySerializer,
     LocationReadSerializer,
     LocationWriteSerializer,
+    LocationOpeningHoursSerializer,
     UserReadSerializer,
     UserWriteSerializer,
     UserMeSerializer,
@@ -43,8 +44,8 @@ class LocationView(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if getattr(user,'role',None) == 'OWNER':
-            return Location.objects.all().select_related('city').order_by('-is_active', 'name')
-        return Location.objects.filter(is_active=True).select_related('city').order_by('name')
+            return Location.objects.all().select_related('city').prefetch_related('opening_hours').order_by('-is_active', 'name')
+        return Location.objects.filter(is_active=True).select_related('city').prefetch_related('opening_hours').order_by('name')
 
     def get_serializer_class(self):
         if self.action in ['list','retrieve']:
@@ -55,9 +56,36 @@ class LocationView(viewsets.ModelViewSet):
     def public(self, request):
         locations = Location.objects.filter(is_active=True).select_related(
             'city', 'city__voivodeship'
-        ).order_by('name')
+        ).prefetch_related('opening_hours').order_by('name')
         serializer = LocationReadSerializer(locations, many=True)
         return Response(serializer.data)
+
+
+class LocationOpeningHoursView(viewsets.ModelViewSet):
+    serializer_class = LocationOpeningHoursSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.AllowAny()]
+        return [IsOwnerOrManager()]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = LocationOpeningHours.objects.select_related('location').order_by('location_id', 'weekday')
+        if not user.is_authenticated:
+            queryset = queryset.filter(location__is_active=True)
+        elif getattr(user, 'role', None) == 'OWNER':
+            pass
+        elif user.location:
+            queryset = queryset.filter(location=user.location)
+        else:
+            return queryset.none()
+
+        requested_location = self.request.query_params.get('location')
+        if requested_location:
+            queryset = queryset.filter(location_id=requested_location)
+
+        return queryset
 
 class UserView(viewsets.ModelViewSet):
     def get_permissions(self):

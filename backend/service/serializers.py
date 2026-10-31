@@ -81,6 +81,7 @@ class TicketReadSerializer(serializers.ModelSerializer):
             'problem_description', 'diagnosis_note', 'status', 'status_display',
             'estimated_cost', 'final_cost', 'total_parts_cost',
             'total_services_cost', 'total_cost', 'used_parts', 'used_services',
+            'status_before_waiting_for_parts',
             'status_history', 'assignment_history', 'created_at', 'updated_at'
         ]
 
@@ -156,7 +157,7 @@ class TicketWriteSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "final_cost": f"Koszt końcowy ({final_cost}) nie może być niższy niż suma części i usług ({total_cost})."
                 })
-        return attrs    
+        return attrs
 
 
 class PublicTicketStatusSerializer(serializers.Serializer):
@@ -168,6 +169,27 @@ class PublicTicketStatusSerializer(serializers.Serializer):
     final_cost = serializers.DecimalField(max_digits=8, decimal_places=2, allow_null=True)
     updated_at = serializers.DateTimeField()
     history = TicketStatusHistorySerializer(many=True)
+
+
+class PublicEmailRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PublicEmailVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(min_length=6, max_length=6)
+
+
+class PublicTicketSummarySerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    location_name = serializers.CharField(source='location.name', read_only=True)
+
+    class Meta:
+        model = Ticket
+        fields = [
+            'id', 'ticket_code', 'device_name', 'status', 'status_display',
+            'location_name', 'created_at', 'updated_at',
+        ]
 
 class ServiceReadSerializer(serializers.ModelSerializer):
     price = serializers.SerializerMethodField()

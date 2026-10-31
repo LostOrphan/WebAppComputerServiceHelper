@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import api from '../../../api/axios';
-import { getParts, getStocks, updateStockMinimum } from '../../../api/inventory';
+import { createCategory, deleteCategory, getCategories, getParts, getStocks, updateCategory, updateStockMinimum } from '../../../api/inventory';
 import { AddPartModal } from '../../../components/private/addPartModal';
 import type { Branch } from '../../../types/auth';
-import type { Part, Stock } from '../../../types/inventory';
+import type { Part, PartCategory, Stock } from '../../../types/inventory';
 
 export const Warehouses: React.FC = () => {
   const [locations, setLocations] = useState<Branch[]>([]);
@@ -17,6 +17,11 @@ export const Warehouses: React.FC = () => {
   const [editingPart, setEditingPart] = useState<Part | null>(null);
   const [selectedPart, setSelectedPart] = useState<Part | null>(null);
   const [savingStockId, setSavingStockId] = useState<number | null>(null);
+  const [categories, setCategories] = useState<PartCategory[]>([]);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<PartCategory | null>(null);
+  const [categoryName, setCategoryName] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
 
   const fetchParts = async () => {
     const data = await getParts();
@@ -27,12 +32,14 @@ export const Warehouses: React.FC = () => {
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
-        const [locationsResponse, partsData] = await Promise.all([
+        const [locationsResponse, partsData, categoriesData] = await Promise.all([
           api.get<Branch[]>('/accounts/locations/'),
           getParts(),
+          getCategories(),
         ]);
         setLocations(locationsResponse.data);
         setParts(partsData);
+        setCategories(categoriesData);
       } catch (err) {
         console.error('Błąd pobierania danych magazynów:', err);
         setError('Nie udało się pobrać danych magazynów.');
@@ -74,6 +81,58 @@ export const Warehouses: React.FC = () => {
   const openEditPart = (part: Part) => {
     setEditingPart(part);
     setIsPartModalOpen(true);
+  };
+
+  const openCreateCategory = () => {
+    setEditingCategory(null);
+    setCategoryName('');
+    setError(null);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openEditCategory = (category: PartCategory) => {
+    setEditingCategory(category);
+    setCategoryName(category.name);
+    setError(null);
+    setIsCategoryModalOpen(true);
+  };
+
+  const saveCategory = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedName = categoryName.trim();
+    if (!trimmedName) return;
+
+    setIsSavingCategory(true);
+    setError(null);
+    try {
+      if (editingCategory) {
+        const updated = await updateCategory(editingCategory.id, trimmedName);
+        setCategories(current => current.map(category => category.id === updated.id ? updated : category));
+      } else {
+        const created = await createCategory(trimmedName);
+        setCategories(current => [...current, created].sort((left, right) => left.name.localeCompare(right.name)));
+      }
+      setIsCategoryModalOpen(false);
+      await fetchParts();
+    } catch (err: any) {
+      const detail = err.response?.data?.name?.[0] || err.response?.data?.detail;
+      setError(detail || 'Nie udało się zapisać kategorii.');
+    } finally {
+      setIsSavingCategory(false);
+    }
+  };
+
+  const removeCategory = async (category: PartCategory) => {
+    if (!window.confirm(`Czy na pewno usunąć kategorię „${category.name}”?`)) return;
+    setError(null);
+    try {
+      await deleteCategory(category.id);
+      setCategories(current => current.filter(item => item.id !== category.id));
+      await fetchParts();
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      setError(detail || 'Nie można usunąć tej kategorii. Być może jest używana przez produkty.');
+    }
   };
 
   const refreshParts = async () => {
@@ -161,7 +220,6 @@ export const Warehouses: React.FC = () => {
                           onBlur={(event) => updateMinimum(stock.id, event.target.value)}
                           disabled={savingStockId === stock.id}
                           className="w-20 rounded border border-slate-300 px-2 py-1 text-sm disabled:bg-slate-100"
-                          aria-label={`Minimalny stan dla ${stock.part.name}`}
                         />
                         <span className="ml-2 text-xs text-slate-400">
                           {stock.min_quantity > 0 ? '' : 'N/D'}
@@ -181,6 +239,45 @@ export const Warehouses: React.FC = () => {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Kategorie produktów</h2>
+          </div>
+          <button type="button" onClick={openCreateCategory} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+            Dodaj kategorię
+          </button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          {isLoading ? (
+            <div className="p-8 text-center text-slate-500">Ładowanie kategorii...</div>
+          ) : categories.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">Brak kategorii.</div>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="p-4">Nazwa kategorii</th>
+                  <th className="p-4 text-right">Akcje</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {categories.map(category => (
+                  <tr key={category.id} className="hover:bg-slate-50">
+                    <td className="p-4 font-medium text-slate-900">{category.name}</td>
+                    <td className="p-4 text-right">
+                      <button type="button" onClick={() => openEditCategory(category)} className="mr-2 rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50">Edytuj</button>
+                      <button type="button" onClick={() => void removeCategory(category)} className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50">Usuń</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </section>
@@ -251,6 +348,25 @@ export const Warehouses: React.FC = () => {
         onSuccess={refreshParts}
         partToEdit={editingPart}
       />
+
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <form onSubmit={saveCategory} className="w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h2 className="text-xl font-bold text-slate-800">{editingCategory ? 'Edytuj kategorię' : 'Dodaj kategorię'}</h2>
+              <button type="button" onClick={() => setIsCategoryModalOpen(false)} disabled={isSavingCategory} aria-label="Zamknij" className="text-2xl text-slate-400 hover:text-slate-700">×</button>
+            </div>
+            <label className="block text-sm font-medium text-slate-700">
+              Nazwa kategorii
+              <input autoFocus required value={categoryName} onChange={event => setCategoryName(event.target.value)} className="mt-1 w-full rounded border border-slate-300 p-2" />
+            </label>
+            <div className="flex justify-end gap-3 border-t pt-4">
+              <button type="button" onClick={() => setIsCategoryModalOpen(false)} disabled={isSavingCategory} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">Anuluj</button>
+              <button type="submit" disabled={isSavingCategory || !categoryName.trim()} className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">{isSavingCategory ? 'Zapisywanie...' : 'Zapisz'}</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {selectedPart && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from .models import City, Location
+from .models import City, Location, LocationOpeningHours
 from .serializers import UserWriteSerializer
 
 
@@ -91,6 +91,35 @@ class AccountApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual([item['name'] for item in response.data], ['Centrum'])
+		self.assertEqual(len(response.data[0]['opening_hours']), 5)
+		self.assertTrue(all(item['is_closed'] for item in response.data[0]['opening_hours']))
+
+	def test_owner_can_update_location_opening_hours(self):
+		self.client.force_authenticate(self.owner)
+		hours = self.location.opening_hours.get(weekday=LocationOpeningHours.Weekday.MONDAY)
+
+		response = self.client.patch(
+			f'/api/accounts/opening-hours/{hours.pk}/',
+			{'opens_at': '08:00', 'closes_at': '16:00', 'is_closed': False},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		hours.refresh_from_db()
+		self.assertEqual(hours.opens_at.strftime('%H:%M'), '08:00')
+		self.assertFalse(hours.is_closed)
+
+	def test_invalid_opening_hours_are_rejected(self):
+		self.client.force_authenticate(self.owner)
+		hours = self.location.opening_hours.get(weekday=LocationOpeningHours.Weekday.MONDAY)
+
+		response = self.client.patch(
+			f'/api/accounts/opening-hours/{hours.pk}/',
+			{'opens_at': '16:00', 'closes_at': '08:00', 'is_closed': False},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 400)
 
 	def test_users_list_contains_only_active_users(self):
 		self.client.force_authenticate(self.owner)

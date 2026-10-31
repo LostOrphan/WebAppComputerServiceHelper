@@ -23,6 +23,16 @@ export interface Branch{
     phone_number: string;
     email: string;
     is_active: boolean;
+    opening_hours: OpeningHours[];
+}
+export interface OpeningHours {
+    id: number;
+    location: number;
+    weekday: number;
+    weekday_name: string;
+    opens_at: string | null;
+    closes_at: string | null;
+    is_closed: boolean;
 }
 export interface User{
     id: number;
