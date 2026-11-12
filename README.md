@@ -26,9 +26,19 @@ PostgreSQL database named in `DB_NAME` before running migrations.
 
 ```powershell
 python manage.py migrate
-python manage.py createsuperuser
+python manage.py first_run
 python manage.py runserver
 ```
+
+`first_run` interactively creates the first owner account. It can also import
+cities from SIMC when a CSV path is entered, or directly with:
+
+```powershell
+python manage.py first_run --csv-file C:\path\to\SIMC.csv
+```
+
+If the initial owner has already been created, use Django's standard
+`python manage.py createsuperuser` command for additional administrative users.
 
 The API is available at `http://127.0.0.1:8000/api`.
 

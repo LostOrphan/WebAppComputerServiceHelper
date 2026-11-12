@@ -1,7 +1,14 @@
+from io import StringIO
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from rest_framework.test import APITestCase
+
+from inventory.models import PartCategory
 
 from .models import City, Location, LocationOpeningHours, Voivodeship
 
@@ -18,6 +25,38 @@ def create_city(name='Gdansk', code='2261011'):
 
 
 class AccountModelTests(TestCase):
+    @patch('accounts.management.commands.first_run.getpass.getpass', side_effect=['Strong-password-123', 'Strong-password-123'])
+    @patch('builtins.input', side_effect=['first-owner', 'Jan', 'Kowalski', ''])
+    def test_first_run_creates_owner_without_city_import(self, mocked_input, mocked_getpass):
+        call_command('first_run', stdout=StringIO())
+
+        user = User.objects.get(username='first-owner')
+        self.assertTrue(user.is_superuser)
+        self.assertTrue(user.is_staff)
+        self.assertEqual(user.role, User.Role.OWNER)
+        self.assertEqual(user.first_name, 'Jan')
+        self.assertEqual(user.last_name, 'Kowalski')
+        self.assertSetEqual(
+            set(PartCategory.objects.values_list('name', flat=True)),
+            {
+                'Dyski HDD',
+                'Dyski SSD',
+                'Karty graficzne',
+                'Pamięci RAM',
+                'Płyty główne',
+                'Procesory',
+                'Zasilacze',
+            },
+        )
+
+    @patch('accounts.management.commands.first_run.getpass.getpass', side_effect=['first-password', 'different-password'])
+    @patch('builtins.input', side_effect=['first-owner', 'Jan', 'Kowalski'])
+    def test_first_run_rejects_mismatched_passwords(self, mocked_input, mocked_getpass):
+        with self.assertRaises(CommandError):
+            call_command('first_run', stdout=StringIO())
+
+        self.assertFalse(User.objects.filter(username='first-owner').exists())
+
     def test_location_creates_five_closed_opening_hours(self):
         location = Location.objects.create(
             name='Centrum', address='Dluga 1', postal_code='80-001',
