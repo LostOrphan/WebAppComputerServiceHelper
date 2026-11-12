@@ -4,8 +4,10 @@ import { createCategory, deleteCategory, getCategories, getParts, getStocks, upd
 import { AddPartModal } from '../../../components/private/addPartModal';
 import type { Branch } from '../../../types/auth';
 import type { Part, PartCategory, Stock } from '../../../types/inventory';
+import { useAuth } from '../../../context/AuthContext';
 
-export const Warehouses: React.FC = () => {
+export const Warehouses: React.FC<{ branchOnly?: boolean }> = ({ branchOnly = false }) => {
+  const { user } = useAuth();
   const [locations, setLocations] = useState<Branch[]>([]);
   const [selectedLocation, setSelectedLocation] = useState('');
   const [stocks, setStocks] = useState<Stock[]>([]);
@@ -23,9 +25,13 @@ export const Warehouses: React.FC = () => {
   const [categoryName, setCategoryName] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
 
+  useEffect(() => {
+    if (branchOnly && user?.location) setSelectedLocation(String(user.location));
+  }, [branchOnly, user?.location]);
+
   const fetchParts = async () => {
     const data = await getParts();
-    setParts(data);
+    setParts(data.results);
   };
 
   useEffect(() => {
@@ -33,12 +39,12 @@ export const Warehouses: React.FC = () => {
       setIsLoading(true);
       try {
         const [locationsResponse, partsData, categoriesData] = await Promise.all([
-          api.get<Branch[]>('/accounts/locations/'),
+          api.get<{ results: Branch[] }>('/accounts/locations/'),
           getParts(),
           getCategories(),
         ]);
-        setLocations(locationsResponse.data);
-        setParts(partsData);
+        setLocations(branchOnly ? locationsResponse.data.results.filter(location => location.id === user?.location) : locationsResponse.data.results);
+        setParts(partsData.results);
         setCategories(categoriesData);
       } catch (err) {
         console.error('Błąd pobierania danych magazynów:', err);
@@ -61,7 +67,7 @@ export const Warehouses: React.FC = () => {
       setIsStockLoading(true);
       setError(null);
       try {
-        setStocks(await getStocks(undefined, undefined, selectedLocation));
+        setStocks((await getStocks(undefined, undefined, selectedLocation)).results);
       } catch (err) {
         console.error('Błąd pobierania stanu magazynu:', err);
         setError('Nie udało się pobrać stanu wybranego magazynu.');
@@ -150,7 +156,7 @@ export const Warehouses: React.FC = () => {
 
     try {
       await updateStockMinimum(stockId, minQuantity);
-      setStocks(await getStocks(undefined, undefined, selectedLocation));
+      setStocks((await getStocks(undefined, undefined, selectedLocation)).results);
     } catch (err) {
       setError('Nie udało się zapisać minimalnego stanu magazynowego.');
     } finally {
@@ -243,7 +249,8 @@ export const Warehouses: React.FC = () => {
         </div>
       </section>
 
-      <section className="space-y-4">
+      {!branchOnly && <>
+        <section className="space-y-4">
         <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-xl font-bold text-slate-800">Kategorie produktów</h2>
@@ -340,14 +347,15 @@ export const Warehouses: React.FC = () => {
             </div>
           )}
         </div>
-      </section>
+        </section>
+      </>}
 
-      <AddPartModal
+      {!branchOnly && <AddPartModal
         isOpen={isPartModalOpen}
         onClose={() => setIsPartModalOpen(false)}
         onSuccess={refreshParts}
         partToEdit={editingPart}
-      />
+      />}
 
       {isCategoryModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

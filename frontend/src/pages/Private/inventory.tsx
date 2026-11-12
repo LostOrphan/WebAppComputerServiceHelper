@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getCategories, getStocks } from '../../api/inventory';
 import type { PartCategory, Stock } from '../../types/inventory';
 import { AddPartModal } from '../../components/private/addPartModal'; // Zauważ małą literę 'addPartModal' jak w Twoim kodzie
@@ -12,6 +12,10 @@ export const Inventory: React.FC = () => {
   const [searchInput, setSearchInput] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [categories, setCategories] = useState<PartCategory[]>([]);
+  const [nextPage, setNextPage] = useState(2);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   // Stany dla okien modalnych
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -25,8 +29,10 @@ export const Inventory: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await getStocks(searchQuery, category);
-      setStocks(data);
+      const data = await getStocks(searchQuery, category, undefined, 1);
+      setStocks(data.results);
+      setNextPage(2);
+      setHasMore(Boolean(data.next));
     } catch (err) {
       setError('Nie udało się pobrać danych magazynowych. Spróbuj ponownie.');
     } finally {
@@ -47,6 +53,25 @@ export const Inventory: React.FC = () => {
 
     return () => window.clearTimeout(timeoutId);
   }, [searchInput, selectedCategory]);
+
+  useEffect(() => {
+    const element = loadMoreRef.current;
+    if (!element || !hasMore) return;
+    const observer = new IntersectionObserver(async () => {
+      if (loadingMore) return;
+      setLoadingMore(true);
+      try {
+        const page = await getStocks(searchInput, selectedCategory, undefined, nextPage);
+        setStocks(current => [...current, ...page.results.filter(item => !current.some(existing => existing.id === item.id))]);
+        setNextPage(current => current + 1);
+        setHasMore(Boolean(page.next));
+      } finally {
+        setLoadingMore(false);
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasMore, nextPage, searchInput, selectedCategory, loadingMore]);
 
   // Kiedy zeskanowano kod, którego nie ma w bazie
   const handlePartNotFound = (scannedCode: string) => {
@@ -201,6 +226,7 @@ export const Inventory: React.FC = () => {
                 })}
               </tbody>
             </table>
+            {hasMore && <div ref={loadMoreRef} className="p-3 text-center text-sm text-slate-500">{loadingMore ? 'Ładowanie...' : 'Przewiń, aby załadować więcej...'}</div>}
           </div>
         )}
       </div>

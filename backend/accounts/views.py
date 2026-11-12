@@ -45,6 +45,8 @@ class LocationView(viewsets.ModelViewSet):
         user = self.request.user
         if getattr(user,'role',None) == 'OWNER':
             return Location.objects.all().select_related('city').prefetch_related('opening_hours').order_by('-is_active', 'name')
+        if getattr(user, 'role', None) == 'MANAGER' and user.location:
+            return Location.objects.filter(pk=user.location_id).select_related('city').prefetch_related('opening_hours').order_by('name')
         return Location.objects.filter(is_active=True).select_related('city').prefetch_related('opening_hours').order_by('name')
 
     def get_serializer_class(self):
@@ -57,8 +59,9 @@ class LocationView(viewsets.ModelViewSet):
         locations = Location.objects.filter(is_active=True).select_related(
             'city', 'city__voivodeship'
         ).prefetch_related('opening_hours').order_by('name')
-        serializer = LocationReadSerializer(locations, many=True)
-        return Response(serializer.data)
+        page = self.paginate_queryset(locations)
+        serializer = LocationReadSerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
 
 class LocationOpeningHoursView(viewsets.ModelViewSet):
@@ -114,8 +117,9 @@ class UserView(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='archived')
     def archived(self, request):
-        serializer = self.get_serializer(self.get_queryset(), many=True)
-        return Response(serializer.data)
+        page = self.paginate_queryset(self.get_queryset())
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
     @action(detail=False,methods=['get','patch'],url_path='me')
     def me(self,request):

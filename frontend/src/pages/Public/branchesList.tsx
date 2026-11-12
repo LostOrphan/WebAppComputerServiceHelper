@@ -10,8 +10,8 @@ export const BranchesList: React.FC = () => {
   useEffect(() => {
     const fetchBranches = async () => {
       try {
-        const response = await api.get<Branch[]>('/accounts/locations/public/');
-        setBranches(response.data);
+        const response = await api.get<{ count: number; next: string | null; previous: string | null; results: Branch[] }>('/accounts/locations/public/');
+        setBranches(response.data.results);
       } catch (error) {
         console.error('Błąd pobierania oddziałów:', error);
         setHasError(true);

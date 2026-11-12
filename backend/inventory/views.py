@@ -3,19 +3,27 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
 
-from accounts.permissions import HasActiveLocation
+from accounts.permissions import HasActiveLocation, IsOwner, IsOwnerOrManager
 from .models import PartCategory, Part, Stock
 from .serializers import PartCategorySerializer, PartSerializer, StockReadSerializer, StockWriteSerializer
 
 class PartCategoryView(viewsets.ModelViewSet):
     queryset = PartCategory.objects.all().order_by('name')
     serializer_class = PartCategorySerializer
-    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated(), HasActiveLocation()]
+        return [IsOwner()]
 
 class PartView(viewsets.ModelViewSet):
     queryset = Part.objects.all().select_related('category').order_by('name')
     serializer_class = PartSerializer
-    permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            return [IsOwnerOrManager(), HasActiveLocation()]
+        return [permissions.IsAuthenticated(), HasActiveLocation()]
 
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'sku', 'ean', 'brand', 'category__name']
@@ -41,7 +49,9 @@ class StockView(viewsets.ModelViewSet):
             return Stock.objects.none()
 
         user = self.request.user
-        queryset = Stock.objects.all().select_related('part', 'part__category', 'location', 'location__city')
+        queryset = Stock.objects.all().select_related(
+            'part', 'part__category', 'location', 'location__city'
+        ).order_by('part__name', 'part_id', 'location_id', 'id')
         if getattr(user, 'role', None) == 'OWNER':
             visible_queryset = queryset
         elif user.location:
@@ -68,13 +78,25 @@ class StockView(viewsets.ModelViewSet):
     def low_stock(self, request):
         queryset = self.get_queryset()
         low_stock_items = [stock for stock in queryset if stock.is_low_stock]
-        serializer = StockReadSerializer(low_stock_items, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        page = self.paginate_queryset(low_stock_items)
+        serializer = StockReadSerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['post'], url_path='receive-goods')
     def receive_goods(self, request):
         identifier = request.data.get('identifier')
-        quantity = int(request.data.get('quantity', 1))
+        try:
+            quantity = int(request.data.get('quantity', 1))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Ilość musi być prawidłową liczbą całkowitą."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if quantity <= 0:
+            return Response(
+                {"detail": "Ilość musi być większa od zera."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         user_location = request.user.location
 
         if not user_location:

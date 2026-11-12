@@ -2,457 +2,220 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import check_password
 from rest_framework.test import APITestCase
 
 from accounts.models import City, Location, Voivodeship
 from clients.models import Client
-from inventory.models import PartCategory, Part, Stock
-from .models import (
-	PublicEmailVerification,
-	Ticket,
-	TicketAssignmentHistory,
-	TicketPart,
-	TicketStatusHistory,
-	ServicePricing,
-	LocationServicePrice,
-)
-from .serializers import TicketWriteSerializer
-
+from inventory.models import Part, PartCategory, Stock
+from .models import Ticket, TicketPart, TicketService, TicketStatusHistory
 
 User = get_user_model()
 
 
-class ServiceTests(APITestCase):
-	def setUp(self):
-		voivodeship = Voivodeship.objects.create(code='PM', name='Pomorskie')
-		city = City.objects.create(name='Gdansk', voivodeship=voivodeship)
-		self.location = Location.objects.create(
-			name='Centrum', address='Dluga 1', postal_code='80-001', city=city
-		)
-		self.inactive_location = Location.objects.create(
-			name='Nieaktywna', address='Krotka 2', postal_code='80-002', city=city,
-			is_active=False,
-		)
-		self.user = User.objects.create_user(
-			username='technician', password='password',
-			role=User.Role.TECHNICIAN, location=self.location,
-		)
-		self.manager = User.objects.create_user(
-			username='manager', password='password',
-			role=User.Role.MANAGER, location=self.location,
-		)
-		self.owner = User.objects.create_user(
-			username='owner', password='password',
-			role=User.Role.OWNER,
-		)
-		self.inactive_user = User.objects.create_user(
-			username='inactive-technician', password='password',
-			role=User.Role.TECHNICIAN, location=self.inactive_location,
-		)
-		self.client_record = Client.objects.create(
-			first_name='Jan', last_name='Kowalski', phone_number='+48500100200'
-		)
-		category = PartCategory.objects.create(name='Laptopy')
-		self.part = Part.objects.create(
-			name='Dysk SSD', sku='SSD-001', category=category,
-			default_buy_price_net=Decimal('100.00'), sell_price_gross=Decimal('150.00'),
-		)
-
-	def create_ticket(self):
-		return Ticket.objects.create(
-			client=self.client_record,
-			location=self.location,
-			assigned_worker=self.user,
-			device_name='Laptop',
-			problem_description='Nie uruchamia sie',
-		)
-
-	def test_ticket_generates_code_and_initial_history(self):
-		ticket = self.create_ticket()
-
-		self.assertRegex(ticket.ticket_code, r'^TCK-[A-F0-9]{6}$')
-		history = ticket.status_history.get()
-		self.assertEqual(history.status, Ticket.Status.NEW)
-
-	def test_ticket_create_endpoint_saves_audit_metadata(self):
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post('/api/service/tickets/', {
-			'client': self.client_record.pk,
-			'location': self.location.pk,
-			'device_name': 'Telefon',
-			'problem_description': 'Uszkodzony ekran',
-			'comment': 'Przyjęto nowe zgłoszenie',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-		self.assertRegex(response.data['ticket_code'], r'^TCK-[A-F0-9]{6}$')
-		ticket = Ticket.objects.get(pk=response.data['id'])
-		self.assertEqual(ticket.created_by, self.user)
-		self.assertEqual(response.data['created_by']['id'], self.user.id)
-		history = ticket.status_history.get()
-		self.assertEqual(history.changed_by, self.user)
-		self.assertEqual(history.comment, 'Przyjęto nowe zgłoszenie')
-
-	def test_status_endpoint_creates_history_with_comment(self):
-		ticket = self.create_ticket()
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.DIAGNOSIS, 'comment': 'Rozpoczeto diagnoze'},
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		history = ticket.status_history.order_by('-changed_at').first()
-		self.assertEqual(history.status, Ticket.Status.DIAGNOSIS)
-		self.assertEqual(history.comment, 'Rozpoczeto diagnoze')
-
-	def test_claim_assigns_worker_and_starts_diagnosis(self):
-		ticket = Ticket.objects.create(
-			client=self.client_record,
-			location=self.location,
-			device_name='Laptop',
-			problem_description='Nie uruchamia sie',
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/claim/',
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		ticket.refresh_from_db()
-		self.assertEqual(ticket.assigned_worker, self.user)
-		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
-		assignment = TicketAssignmentHistory.objects.get(ticket=ticket)
-		self.assertEqual(assignment.worker, self.user)
-
-	def test_claim_is_idempotent_for_already_assigned_worker(self):
-		ticket = self.create_ticket()
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/claim/',
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		ticket.refresh_from_db()
-		self.assertEqual(ticket.assigned_worker, self.user)
-		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
-
-	def test_technician_can_take_over_ticket_and_audit_it(self):
-		other_worker = User.objects.create_user(
-			username='other-technician', password='password',
-			role=User.Role.TECHNICIAN, location=self.location,
-		)
-		ticket = Ticket.objects.create(
-			client=self.client_record,
-			location=self.location,
-			assigned_worker=other_worker,
-			device_name='Laptop',
-			problem_description='Nie uruchamia sie',
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/take-over/',
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		ticket.refresh_from_db()
-		self.assertEqual(ticket.assigned_worker, self.user)
-		history = ticket.status_history.order_by('-changed_at').first()
-		self.assertEqual(history.changed_by, self.user)
-		self.assertEqual(history.comment, 'technician przejął zgłoszenie')
-
-	def test_unassigned_technician_cannot_modify_ticket(self):
-		ticket = Ticket.objects.create(
-			client=self.client_record,
-			location=self.location,
-			device_name='Laptop',
-			problem_description='Nie uruchamia sie',
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.patch(
-			f'/api/service/tickets/{ticket.pk}/',
-			{'diagnosis_note': 'Nieautoryzowana zmiana'},
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 403)
-
-	def test_generic_update_cannot_change_status_or_assignment(self):
-		ticket = self.create_ticket()
-
-		serializer = TicketWriteSerializer(
-			ticket,
-			data={'status': Ticket.Status.IN_PROGRESS},
-			partial=True,
-		)
-
-		self.assertFalse(serializer.is_valid())
-		self.assertIn('status', serializer.errors)
-
-		serializer = TicketWriteSerializer(
-			ticket,
-			data={'assigned_worker': None},
-			partial=True,
-		)
-
-		self.assertFalse(serializer.is_valid())
-		self.assertIn('assigned_worker', serializer.errors)
-
-	def test_invalid_status_transition_is_rejected(self):
-		ticket = self.create_ticket()
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.CLOSED},
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 409)
-
-	def test_waiting_for_parts_remembers_diagnosis_and_resume_does_not_duplicate(self):
-		ticket = self.create_ticket()
-		self.client.force_authenticate(self.user)
-
-		first_response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.DIAGNOSIS},
-			format='json',
-		)
-		self.assertEqual(first_response.status_code, 200)
-		second_response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/wait-for-parts/',
-			format='json',
-		)
-		self.assertEqual(second_response.status_code, 200)
-		self.assertEqual(second_response.data['status_before_waiting_for_parts'], Ticket.Status.DIAGNOSIS)
-		history_count = ticket.status_history.count()
-		self.assertEqual(
-			list(ticket.status_history.order_by('changed_at').values_list('status', flat=True)),
-			[Ticket.Status.NEW, Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS],
-		)
-
-		third_response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/resume-work/',
-			format='json',
-		)
-		self.assertEqual(third_response.status_code, 200)
-		ticket.refresh_from_db()
-		self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
-		self.assertIsNone(ticket.status_before_waiting_for_parts)
-		self.assertEqual(ticket.status_history.count(), history_count + 1)
-
-	def test_waiting_for_parts_resumes_repair(self):
-		ticket = self.create_ticket()
-		self.client.force_authenticate(self.user)
-
-		self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.DIAGNOSIS},
-			format='json',
-		)
-		self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.IN_PROGRESS},
-			format='json',
-		)
-		wait_response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/wait-for-parts/',
-			format='json',
-		)
-		self.assertEqual(wait_response.status_code, 200)
-		self.assertEqual(wait_response.data['status_before_waiting_for_parts'], Ticket.Status.IN_PROGRESS)
-
-		resume_response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/resume-work/',
-			format='json',
-		)
-		self.assertEqual(resume_response.status_code, 200)
-		self.assertEqual(resume_response.data['status'], Ticket.Status.IN_PROGRESS)
-
-	def test_inactive_location_user_cannot_change_ticket_status(self):
-		ticket = self.create_ticket()
-		ticket.location = self.inactive_location
-		ticket.assigned_worker = self.inactive_user
-		ticket.save(update_fields=['location', 'assigned_worker'])
-		self.client.force_authenticate(self.inactive_user)
-
-		response = self.client.post(
-			f'/api/service/tickets/{ticket.pk}/change-status/',
-			{'status': Ticket.Status.DIAGNOSIS},
-			format='json',
-		)
-
-		self.assertEqual(response.status_code, 403)
-
-	def test_public_status_requires_matching_phone_number(self):
-		ticket = self.create_ticket()
-
-		response = self.client.post('/api/service/public-status/', {
-			'ticket_code': ticket.ticket_code,
-			'phone_number': '+48500100200',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(response.data['ticket_code'], ticket.ticket_code)
-		self.assertEqual(len(response.data['history']), 1)
-
-		wrong_phone = self.client.post('/api/service/public-status/', {
-			'ticket_code': ticket.ticket_code,
-			'phone_number': '+48500100201',
-		}, format='json')
-		self.assertEqual(wrong_phone.status_code, 404)
-
-	def test_public_email_verification_returns_client_tickets(self):
-		self.client_record.email = 'jan@example.com'
-		self.client_record.save(update_fields=['email'])
-		ticket = self.create_ticket()
-
-		with patch('service.views.secrets.randbelow', return_value=123456):
-			request_response = self.client.post(
-				'/api/service/public-track/request-code/',
-				{'email': 'JAN@example.com'},
-				format='json',
-			)
-
-		self.assertEqual(request_response.status_code, 202)
-		verification = PublicEmailVerification.objects.get(email='jan@example.com')
-		self.assertTrue(check_password('123456', verification.code_hash))
-
-		verify_response = self.client.post(
-			'/api/service/public-track/verify-code/',
-			{'email': 'jan@example.com', 'code': '123456'},
-			format='json',
-		)
-
-		self.assertEqual(verify_response.status_code, 200)
-		list_response = self.client.post(
-			'/api/service/public-track/tickets/',
-			{'tracking_token': verify_response.data['tracking_token']},
-			format='json',
-		)
-
-		self.assertEqual(list_response.status_code, 200)
-		self.assertEqual(list_response.data[0]['id'], ticket.id)
-		self.assertEqual(list_response.data[0]['status'], Ticket.Status.NEW)
-		self.assertEqual(list_response.data[0]['location_name'], self.location.name)
-		self.assertIn('created_at', list_response.data[0])
-		self.assertIn('updated_at', list_response.data[0])
-
-	def test_final_cost_cannot_be_lower_than_used_parts(self):
-		ticket = self.create_ticket()
-		TicketPart.objects.create(
-			ticket=ticket, part=self.part, quantity=2, price_at_use=Decimal('150.00')
-		)
-
-		serializer = TicketWriteSerializer(
-			ticket, data={'final_cost': '200.00'}, partial=True
-		)
-
-		self.assertFalse(serializer.is_valid())
-		self.assertIn('final_cost', serializer.errors)
-
-	def test_ticket_part_creation_deducts_stock_and_snapshots_price(self):
-		ticket = self.create_ticket()
-		stock = Stock.objects.create(
-			part=self.part, location=self.location, quantity=5, min_quantity=1
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post('/api/service/ticket-parts/', {
-			'ticket': ticket.pk,
-			'part': self.part.pk,
-			'quantity': 2,
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-		stock.refresh_from_db()
-		self.assertEqual(stock.quantity, 3)
-		ticket_part = TicketPart.objects.get(ticket=ticket)
-		self.assertEqual(ticket_part.price_at_use, self.part.sell_price_gross)
-
-	def test_ticket_part_creation_rolls_back_when_stock_is_insufficient(self):
-		ticket = self.create_ticket()
-		Stock.objects.create(
-			part=self.part, location=self.location, quantity=1, min_quantity=1
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post('/api/service/ticket-parts/', {
-			'ticket': ticket.pk,
-			'part': self.part.pk,
-			'quantity': 2,
-		}, format='json')
-
-		self.assertEqual(response.status_code, 400)
-		self.assertFalse(TicketPart.objects.filter(ticket=ticket).exists())
-
-	def test_service_catalog_uses_location_override(self):
-		service = ServicePricing.objects.create(
-			name='Czyszczenie', default_price=Decimal('100.00')
-		)
-		LocationServicePrice.objects.create(
-			location=self.location, service=service, custom_price=Decimal('125.00')
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.get('/api/service/services/')
-
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(response.data[0]['price'], '125.00')
-		self.assertTrue(response.data[0]['is_available'])
-
-	def test_manager_can_change_only_own_location_price(self):
-		service = ServicePricing.objects.create(
-			name='Diagnoza', default_price=Decimal('80.00')
-		)
-		self.client.force_authenticate(self.manager)
-
-		response = self.client.post('/api/service/location-service-prices/', {
-			'location': self.location.pk,
-			'service': service.pk,
-			'custom_price': '95.00',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-		self.assertEqual(response.data['effective_price'], '95.00')
-
-	def test_technician_cannot_modify_location_price(self):
-		service = ServicePricing.objects.create(
-			name='Odzyskiwanie danych', default_price=Decimal('300.00')
-		)
-		self.client.force_authenticate(self.user)
-
-		response = self.client.post('/api/service/location-service-prices/', {
-			'location': self.location.pk,
-			'service': service.pk,
-			'custom_price': '350.00',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 403)
-
-	def test_only_owner_can_modify_service_catalog(self):
-		self.client.force_authenticate(self.manager)
-		manager_response = self.client.post('/api/service/services/', {
-			'name': 'Niedozwolona usługa',
-			'default_price': '50.00',
-		}, format='json')
-		self.assertEqual(manager_response.status_code, 403)
-
-		self.client.force_authenticate(self.owner)
-		owner_response = self.client.post('/api/service/services/', {
-			'name': 'Nowa usługa',
-			'default_price': '50.00',
-		}, format='json')
-		self.assertEqual(owner_response.status_code, 201)
+class ServiceApiTests(APITestCase):
+    def setUp(self):
+        voivodeship = Voivodeship.objects.create(code='PM', name='Pomorskie')
+        city = City.objects.create(
+            name='Gdansk', simc_code='2261011', locality_type='96',
+            voivodeship=voivodeship, county_code='101',
+            municipality_code='01', municipality_type='1',
+        )
+        self.location = Location.objects.create(
+            name='Centrum', address='Dluga 1', postal_code='80-001', city=city,
+        )
+        self.other_location = Location.objects.create(
+            name='Wrzeszcz', address='Grunwaldzka 2', postal_code='80-002', city=city,
+        )
+        self.owner = User.objects.create_user('owner', password='pass', role=User.Role.OWNER)
+        self.manager = User.objects.create_user(
+            'manager', password='pass', role=User.Role.MANAGER, location=self.location,
+        )
+        self.worker = User.objects.create_user(
+            'worker', password='pass', role=User.Role.TECHNICIAN, location=self.location,
+        )
+        self.other_worker = User.objects.create_user(
+            'other-worker', password='pass', role=User.Role.TECHNICIAN, location=self.location,
+        )
+        self.client_record = Client.objects.create(
+            first_name='Jan', last_name='Kowalski', email='jan@example.com',
+            phone_number='+48500100100', location=self.location,
+        )
+        self.category = PartCategory.objects.create(name='Dyski')
+        self.part = Part.objects.create(
+            name='SSD', sku='SSD-001', category=self.category,
+            default_buy_price_net=Decimal('100'), sell_price_gross=Decimal('150'),
+        )
+        self.stock = Stock.objects.create(part=self.part, location=self.location, quantity=5)
+
+    def ticket(self, status=Ticket.Status.NEW, assigned_worker=None):
+        return Ticket.objects.create(
+            client=self.client_record, location=self.location,
+            assigned_worker=assigned_worker, created_by=self.worker,
+            device_name='Laptop', serial_number='SN-1',
+            device_passcode='secret', problem_description='Nie uruchamia się',
+            status=status,
+        )
+
+    def authenticate(self, user=None):
+        self.client.force_authenticate(user or self.worker)
+
+    def test_create_ticket_records_history_and_hides_passcode(self):
+        self.authenticate()
+        response = self.client.post(
+            '/api/service/tickets/',
+            {
+                'client': self.client_record.id, 'location': self.location.id,
+                'device_name': 'Laptop', 'device_passcode': 'secret',
+                'problem_description': 'Awaria',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn('device_passcode', response.data)
+        self.assertEqual(TicketStatusHistory.objects.count(), 1)
+
+    def test_ticket_list_is_scoped_and_paginated(self):
+        self.ticket()
+        self.authenticate()
+        response = self.client.get('/api/service/tickets/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+
+    def test_claim_moves_new_ticket_to_diagnosis(self):
+        ticket = self.ticket()
+        self.authenticate()
+        response = self.client.post(f'/api/service/tickets/{ticket.id}/claim/')
+        self.assertEqual(response.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
+        self.assertEqual(ticket.assigned_worker_id, self.worker.id)
+
+    def test_unassigned_worker_cannot_reveal_passcode(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.other_worker)
+        self.authenticate()
+        response = self.client.get(f'/api/service/tickets/{ticket.id}/device-passcode/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_assigned_worker_can_reveal_passcode_separately(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.worker)
+        self.authenticate()
+        detail = self.client.get(f'/api/service/tickets/{ticket.id}/')
+        reveal = self.client.get(f'/api/service/tickets/{ticket.id}/device-passcode/')
+        self.assertNotIn('device_passcode', detail.data)
+        self.assertEqual(reveal.data['device_passcode'], 'secret')
+
+    def test_wait_and_return_to_diagnosis(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.worker)
+        self.authenticate()
+        wait = self.client.post(f'/api/service/tickets/{ticket.id}/wait-for-parts/')
+        self.assertEqual(wait.status_code, 200)
+        self.assertEqual(wait.data['status'], Ticket.Status.WAITING_FOR_PARTS)
+        back = self.client.post(f'/api/service/tickets/{ticket.id}/return-to-diagnosis/')
+        self.assertEqual(back.status_code, 200)
+        self.assertEqual(back.data['status'], Ticket.Status.DIAGNOSIS)
+
+    def test_start_repair_reserves_stock(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.worker)
+        TicketPart.objects.create(
+            ticket=ticket, part=self.part, quantity=2, price_at_use=Decimal('150'),
+        )
+        self.authenticate()
+        response = self.client.post(
+            f'/api/service/tickets/{ticket.id}/change-status/',
+            {'status': Ticket.Status.IN_PROGRESS},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 3)
+        self.assertTrue(ticket.used_parts.get().stock_reserved)
+
+    def test_start_repair_rejects_insufficient_stock(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.worker)
+        TicketPart.objects.create(
+            ticket=ticket, part=self.part, quantity=10, price_at_use=Decimal('150'),
+        )
+        self.authenticate()
+        response = self.client.post(
+            f'/api/service/tickets/{ticket.id}/change-status/',
+            {'status': Ticket.Status.IN_PROGRESS},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 409)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, Ticket.Status.DIAGNOSIS)
+
+    @patch('service.views.send_mail')
+    def test_ready_status_sends_notification(self, send_mail):
+        ticket = self.ticket(status=Ticket.Status.IN_PROGRESS, assigned_worker=self.worker)
+        self.authenticate()
+        response = self.client.post(
+            f'/api/service/tickets/{ticket.id}/change-status/',
+            {'status': Ticket.Status.READY},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        send_mail.assert_called_once()
+        self.assertIn(self.location.name, send_mail.call_args.kwargs['message'])
+
+    @patch('service.views.send_mail', side_effect=OSError('mail down'))
+    def test_email_failure_does_not_block_ready_status(self, send_mail):
+        ticket = self.ticket(status=Ticket.Status.IN_PROGRESS, assigned_worker=self.worker)
+        self.authenticate()
+        response = self.client.post(
+            f'/api/service/tickets/{ticket.id}/change-status/',
+            {'status': Ticket.Status.READY},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, Ticket.Status.READY)
+
+    def test_resend_email_requires_ready_status(self):
+        ticket = self.ticket(status=Ticket.Status.IN_PROGRESS, assigned_worker=self.worker)
+        self.authenticate()
+        response = self.client.post(f'/api/service/tickets/{ticket.id}/send-ready-email/')
+        self.assertEqual(response.status_code, 409)
+
+    @patch('service.views.send_mail')
+    def test_public_email_tracking_flow(self, send_mail):
+        self.ticket()
+        request = self.client.post(
+            '/api/service/public-track/request-code/',
+            {'email': self.client_record.email},
+            format='json',
+        )
+        self.assertEqual(request.status_code, 202)
+        message = send_mail.call_args.kwargs['message']
+        code = message.split(': ')[1].split('.')[0]
+        verify = self.client.post(
+            '/api/service/public-track/verify-code/',
+            {'email': self.client_record.email, 'code': code},
+            format='json',
+        )
+        self.assertEqual(verify.status_code, 200)
+        tickets = self.client.post(
+            '/api/service/public-track/tickets/',
+            {'tracking_token': verify.data['tracking_token']},
+            format='json',
+        )
+        self.assertEqual(tickets.status_code, 200)
+
+    def test_negative_service_price_is_rejected(self):
+        self.authenticate(self.owner)
+        response = self.client.post(
+            '/api/service/services/',
+            {'name': 'Diagnoza', 'default_price': '-1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_ticket_part_requires_positive_quantity(self):
+        ticket = self.ticket(status=Ticket.Status.DIAGNOSIS, assigned_worker=self.worker)
+        self.authenticate()
+        response = self.client.post(
+            '/api/service/ticket-parts/',
+            {'ticket': ticket.id, 'part': self.part.id, 'quantity': 0},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)

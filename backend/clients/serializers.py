@@ -7,8 +7,12 @@ class ClientSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Client
-        fields = ['id', 'first_name', 'last_name', 'full_name', 'phone_number', 'email', 'is_anonymized', 'active_tickets_count', 'created_at']
-        read_only_fields = ['id','is_anonymized','created_at']
+        fields = ['id', 'first_name', 'last_name', 'full_name', 'phone_number', 'email', 'location', 'is_anonymized', 'active_tickets_count', 'created_at']
+        read_only_fields = ['id', 'location', 'is_anonymized', 'created_at']
+        extra_kwargs = {
+            'email': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'phone_number': {'required': False, 'allow_blank': True, 'allow_null': True},
+        }
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
     def get_active_tickets_count(self,obj):

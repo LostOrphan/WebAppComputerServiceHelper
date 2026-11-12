@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createClient, createTicket, getClients, getTickets } from '../../api/service';
 import { useAuth } from '../../context/AuthContext';
@@ -45,6 +45,10 @@ export const Service: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
+  const [nextPage, setNextPage] = useState(2);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const loadTickets = async () => {
     setLoading(true);
@@ -54,7 +58,10 @@ export const Service: React.FC = () => {
         : statusFilter === 'ALL'
           ? undefined
           : [statusFilter];
-      setTickets(await getTickets(search, statuses));
+      const page = await getTickets(search, statuses, 1);
+      setTickets(page.results);
+      setNextPage(2);
+      setHasMore(Boolean(page.next));
       setError('');
     } catch {
       setError('Nie udało się pobrać zgłoszeń.');
@@ -67,8 +74,38 @@ export const Service: React.FC = () => {
     void loadTickets();
   }, [search, statusFilter]);
 
+  const loadMoreTickets = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const statuses = statusFilter === 'ACTIVE' ? activeStatuses : statusFilter === 'ALL' ? undefined : [statusFilter];
+      const page = await getTickets(search, statuses, nextPage);
+      setTickets(current => [...current, ...page.results.filter(item => !current.some(existing => existing.id === item.id))]);
+      setNextPage(current => current + 1);
+      setHasMore(Boolean(page.next));
+    } catch {
+      setError('Nie udało się pobrać kolejnych zgłoszeń.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    const element = loadMoreRef.current;
+    if (!element || !hasMore) return;
+    const observer = new IntersectionObserver(() => void loadMoreTickets(), { rootMargin: '200px' });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasMore, nextPage, search, statusFilter, loadingMore]);
+
   const openCreateModal = () => {
     setShowCreate(true);
+    setError('');
+  };
+
+  const clearCreateForm = () => {
+    setForm(emptyForm);
+    setMatchedClient(null);
     setError('');
   };
 
@@ -85,7 +122,7 @@ export const Service: React.FC = () => {
     const timeoutId = window.setTimeout(async () => {
       setIsSearchingClient(true);
       try {
-        const matches = await getClients(normalizedPhone);
+        const matches = (await getClients(normalizedPhone)).results;
         if (!isCancelled) {
           const exactMatch = matches.find(client => (
             client.phone_number?.replace(/\D/g, '') === normalizedPhone
@@ -112,6 +149,45 @@ export const Service: React.FC = () => {
       window.clearTimeout(timeoutId);
     };
   }, [form.phone_number]);
+
+  useEffect(() => {
+    const email = form.email.trim().toLowerCase();
+    if (!email.includes('@') || !email.includes('.')) {
+      return;
+    }
+
+    let isCancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearchingClient(true);
+      try {
+        const matches = (await getClients(email)).results;
+        if (!isCancelled) {
+          const exactMatch = matches.find(client => (
+            client.email?.trim().toLowerCase() === email
+          ));
+          setMatchedClient(exactMatch ?? null);
+          if (exactMatch) {
+            setForm(current => ({
+              ...current,
+              first_name: exactMatch.first_name,
+              last_name: exactMatch.last_name,
+              email: exactMatch.email ?? '',
+              phone_number: exactMatch.phone_number ?? '',
+            }));
+          }
+        }
+      } catch {
+        if (!isCancelled) setMatchedClient(null);
+      } finally {
+        if (!isCancelled) setIsSearchingClient(false);
+      }
+    }, 300);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [form.email]);
 
   const submitTicket = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -152,8 +228,8 @@ export const Service: React.FC = () => {
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
-            placeholder="Szukaj zgłoszenia..."
-            className="rounded border border-slate-300 px-3 py-2"
+            placeholder="Szukaj zgłoszenia, klienta lub e-maila..."
+            className="w-full rounded border border-slate-300 px-3 py-2 sm:w-80"
           />
           <select
             value={statusFilter}
@@ -219,6 +295,7 @@ export const Service: React.FC = () => {
             ))}
           </div>
         )}
+        {hasMore && <div ref={loadMoreRef} className="p-3 text-center text-sm text-slate-500">{loadingMore ? 'Ładowanie...' : 'Przewiń, aby załadować więcej...'}</div>}
       </section>
 
       {showCreate && (
@@ -281,7 +358,15 @@ export const Service: React.FC = () => {
               type="email"
               placeholder="Adres e-mail (opcjonalnie)"
               value={form.email}
-              onChange={event => setForm({ ...form, email: event.target.value })}
+              onChange={event => {
+                setForm({
+                  ...form,
+                  email: event.target.value,
+                  first_name: '',
+                  last_name: '',
+                });
+                setMatchedClient(null);
+              }}
               readOnly={Boolean(matchedClient)}
               className="w-full rounded border border-slate-300 p-2"
             />
@@ -314,9 +399,18 @@ export const Service: React.FC = () => {
               onChange={event => setForm({ ...form, problem_description: event.target.value })}
               className="min-h-28 w-full rounded border border-slate-300 p-2"
             />
-            <button className="w-full rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700">
-              Utwórz zgłoszenie
-            </button>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={clearCreateForm}
+                className="flex-1 rounded border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Wyczyść
+              </button>
+              <button className="flex-1 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700">
+                Utwórz zgłoszenie
+              </button>
+            </div>
           </form>
         </div>
       )}

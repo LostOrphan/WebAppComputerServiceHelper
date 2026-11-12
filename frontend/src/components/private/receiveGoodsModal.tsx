@@ -54,7 +54,7 @@ export const ReceiveGoodsModal: React.FC<ReceiveGoodsModalProps> = ({
       setIsSearching(true);
       setHasSearched(false);
       try {
-        setSearchResults(await getParts(searchTerm));
+        setSearchResults((await getParts(searchTerm)).results);
         setHasSearched(true);
       } catch {
         setSearchResults([]);

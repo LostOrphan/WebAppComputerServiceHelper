@@ -41,30 +41,30 @@ REQUIRED_COLUMNS = {
 
 
 class Command(BaseCommand):
-    help = 'Imports locality data from a SIMC CSV file.'
+    help = 'Importuje dane z pliku CSV SIMC do bazy danych.'
 
     def add_arguments(self, parser):
         parser.add_argument('csv_file', type=Path)
         parser.add_argument(
             '--encoding',
             default='utf-8-sig',
-            help='CSV encoding. Use cp1250 for older Polish exports.',
+            help='Kodowanie CSV. Użyj cp1250 dla starszych eksportów.',
         )
         parser.add_argument(
             '--delimiter',
             default=None,
-            help='CSV delimiter. Auto-detected when omitted.',
+            help='Separator CSV. Wykrywany automatycznie jeśli pominięty.',
         )
         parser.add_argument(
             '--dry-run',
             action='store_true',
-            help='Validate and count rows without changing the database.',
+            help='Waliduje i zlicza wiersze bez zmiany bazy danych.',
         )
 
     def handle(self, *args, **options):
         csv_path = options['csv_file']
         if not csv_path.is_file():
-            raise CommandError(f'File does not exist: {csv_path}')
+            raise CommandError(f'Plik nie istnieje: {csv_path}')
 
         try:
             with csv_path.open('r', encoding=options['encoding'], newline='') as file:
@@ -79,14 +79,14 @@ class Command(BaseCommand):
                 missing = REQUIRED_COLUMNS - headers
                 if missing:
                     missing_columns = ', '.join(sorted(missing))
-                    raise CommandError(f'Missing required columns: {missing_columns}')
+                    raise CommandError(f'Brak wymaganych kolumn: {missing_columns}')
                 rows = [
                     (row_number, self.normalized_row(row))
                     for row_number, row in enumerate(reader, start=2)
                 ]
         except UnicodeDecodeError as error:
             raise CommandError(
-                f'Could not decode {csv_path}. Try --encoding cp1250.'
+                f'Nie można zdekodować {csv_path}. Spróbuj --encoding cp1250.'
             ) from error
 
         selected_rows = [
@@ -100,8 +100,8 @@ class Command(BaseCommand):
             for row_number, row in selected_rows:
                 self.validate_row(row, row_number)
             self.stdout.write(self.style.SUCCESS(
-                f'Validated {len(selected_rows)} SIMC rows; skipped {skipped}. '
-                'No database changes made.'
+                f'Potwierdzono {len(selected_rows)} wierszy SIMC; pominięto {skipped}. '
+                'Nie wprowadzono zmian w bazie danych.'
             ))
             return
 
@@ -130,7 +130,7 @@ class Command(BaseCommand):
                 imported += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f'Imported {imported} SIMC rows from {csv_path.name}; skipped {skipped}.'
+            f'Zimportowano {imported} wierszy SIMC z {csv_path.name}; pominięto {skipped}.'
         ))
 
     @staticmethod
@@ -155,8 +155,8 @@ class Command(BaseCommand):
     def validate_row(row, row_number):
         for field in ('woj', 'pow', 'gmi', 'rodz_gmi', 'rm', 'nazwa', 'sym'):
             if not row.get(field):
-                raise CommandError(f'Row {row_number}: column {field} is empty.')
+                raise CommandError(f'Wiersz {row_number}: kolumna {field} jest pusta.')
         if row['woj'] not in VOIVODESHIP_NAMES:
             raise CommandError(
-                f"Row {row_number}: unknown voivodeship code '{row['woj']}'."
+                f"Wiersz {row_number}: nieznany kod województwa '{row['woj']}'."
             )

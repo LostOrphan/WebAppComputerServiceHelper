@@ -89,11 +89,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     const timeoutId = window.setTimeout(async () => {
       setIsSearchingCities(true);
       try {
-        const response = await api.get<City[]>('/accounts/cities/', {
+        const response = await api.get<{ results: City[] }>('/accounts/cities/', {
           params: { search: cityQuery.trim() },
         });
         if (!isCancelled) {
-          setCitySuggestions(response.data);
+          setCitySuggestions(response.data.results);
         }
       } catch (err) {
         console.error('Błąd wyszukiwania miast:', err);
@@ -171,10 +171,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
 
       let rows = openingHours;
       if (!branchToEdit && locationId) {
-        const hoursResponse = await api.get<OpeningHours[]>('/accounts/opening-hours/', {
+        const hoursResponse = await api.get<{ results: OpeningHours[] }>('/accounts/opening-hours/', {
           params: { location: locationId },
         });
-        rows = hoursResponse.data.map(hours => ({
+        rows = hoursResponse.data.results.map(hours => ({
           id: hours.id,
           weekday: hours.weekday,
           opens_at: openingHours.find(item => item.weekday === hours.weekday)?.opens_at || '',

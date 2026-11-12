@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.exceptions import ValidationError
 
@@ -11,7 +11,7 @@ class Voivodeship(models.Model):
         ordering = ['name']
     def __str__(self):
         return self.name
-#imported from SIMC
+#import z SIMC
 class City(models.Model):
     name = models.CharField(max_length=150)
     simc_code = models.CharField(max_length=7, unique=True)
@@ -80,13 +80,30 @@ class LocationOpeningHours(models.Model):
         if self.closes_at <= self.opens_at:
             raise ValidationError('Godzina zamknięcia musi być późniejsza niż godzina otwarcia.')
 
+class CustomUserManager(UserManager):
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields['role'] = 'OWNER'
+        extra_fields['location'] = None
+        extra_fields['is_staff'] = True
+        extra_fields['is_superuser'] = True
+        extra_fields['is_active'] = True
+
+        return self.create_user(
+            username=username,
+            email=email,
+            password=password,
+            **extra_fields,
+        )
+
+
 class CustomUser(AbstractUser):
     class Role(models.TextChoices):
-        OWNER = 'OWNER', 'Szefostwo firmy'
-        MANAGER = 'MANAGER', 'Kierownictwo serwisu'
+        OWNER = 'OWNER', 'Zarząd firmy'
+        MANAGER = 'MANAGER', 'Kierownik oddzialu'
         TECHNICIAN = 'TECHNICIAN', 'Serwisant'
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.TECHNICIAN)
     location = models.ForeignKey(Location,on_delete=models.SET_NULL,null=True,blank=True,related_name='employees')
+    objects = CustomUserManager()
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"

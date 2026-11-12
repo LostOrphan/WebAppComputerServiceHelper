@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
@@ -11,6 +12,7 @@ from django.core import signing
 from django.core.mail import send_mail
 from django.contrib.auth.hashers import check_password, make_password
 from django.utils import timezone
+import logging
 from datetime import timedelta
 import secrets
 import smtplib
@@ -37,6 +39,57 @@ from .serializers import (
 from inventory.models import Stock
 from accounts.permissions import HasActiveLocation, IsOwner, IsOwnerOrManager
 
+logger = logging.getLogger(__name__)
+
+
+def send_ready_notification(ticket):
+    email = ticket.client.email
+    if not email:
+        logger.info('Ready notification skipped for %s: client has no email.', ticket.ticket_code)
+        return
+
+    send_mail(
+        subject=f'Zgłoszenie {ticket.ticket_code} gotowe do odbioru',
+        message=(
+            f'Dzień dobry,\n'
+            f'Informujemy, że przedmiot ze zgłoszenia {ticket.ticket_code} '
+            f'jest gotowy do odbioru w {ticket.location.name}.\n'
+            f'Adres oraz godziny otwarcia można znaleźć na naszej stronie internetowej.\n\n'
+            f'Z poważaniem,\n'
+            f'Serwis Komputerowy NAZWA'
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[email],
+        fail_silently=False,
+    )
+
+
+def try_send_ready_notification(ticket):
+    try:
+        send_ready_notification(ticket)
+    except Exception:
+        logger.exception('Could not send ready notification for %s.', ticket.ticket_code)
+
+
+def reserve_ticket_parts(ticket):
+    parts = TicketPart.objects.select_for_update().filter(
+        ticket=ticket,
+        stock_reserved=False,
+    ).select_related('part')
+    for ticket_part in parts:
+        stock = Stock.objects.select_for_update().filter(
+            location=ticket.location,
+            part=ticket_part.part,
+        ).first()
+        if not stock or stock.quantity < ticket_part.quantity:
+            raise serializers.ValidationError({
+                'parts': f'Brak wystarczającej liczby części: {ticket_part.part.name}.'
+            })
+        stock.quantity -= ticket_part.quantity
+        stock.save(update_fields=['quantity'])
+        ticket_part.stock_reserved = True
+        ticket_part.save(update_fields=['stock_reserved'])
+
 
 def technician_can_edit_ticket(user, ticket):
     return user.role != 'TECHNICIAN' or ticket.assigned_worker_id == user.id
@@ -44,8 +97,24 @@ def technician_can_edit_ticket(user, ticket):
 class TicketView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasActiveLocation]
     filter_backends = [filters.SearchFilter,filters.OrderingFilter]
-    search_fields = ['ticket_code','device_name','serial_number','client__first_name','client__last_name','client__phone_number']
+    search_fields = [
+        'ticket_code',
+        'device_name',
+        'serial_number',
+        'client__first_name',
+        'client__last_name',
+        'client__phone_number',
+        'client__email',
+    ]
     ordering_fields = ['created_at','updated_at','status']
+
+    def get_throttles(self):
+        if self.action in ['device_passcode', 'send_ready_email']:
+            self.throttle_scope = (
+                'device_passcode' if self.action == 'device_passcode' else 'ready_email'
+            )
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
@@ -70,7 +139,7 @@ class TicketView(viewsets.ModelViewSet):
                 status__in=[status for status in statuses if status in valid_statuses]
             )
 
-        return location_queryset
+        return location_queryset.order_by('-updated_at', '-id')
 
     def get_serializer_class(self):
         if self.action in ['list','retrieve']:
@@ -125,9 +194,42 @@ class TicketView(viewsets.ModelViewSet):
                 {"detail": "Nie można wykonać tej zmiany statusu."},
                 status=status.HTTP_409_CONFLICT,
             )
+        if new_status == Ticket.Status.IN_PROGRESS:
+            try:
+                reserve_ticket_parts(ticket)
+            except serializers.ValidationError as error:
+                return Response(error.detail, status=status.HTTP_409_CONFLICT)
         ticket.status = new_status
         ticket.save(user=request.user, comment=comment)
+        if new_status == Ticket.Status.READY:
+            try_send_ready_notification(ticket)
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='send-ready-email')
+    def send_ready_email(self, request, pk=None):
+        ticket = self.get_object()
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response(
+                {"detail": "Tylko przypisany pracownik może wysłać powiadomienie."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if ticket.status != Ticket.Status.READY:
+            return Response(
+                {"detail": "Powiadomienie można wysłać tylko dla gotowego zgłoszenia."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try_send_ready_notification(ticket)
+        return Response({"detail": "Próba wysłania powiadomienia została wykonana."})
+
+    @action(detail=True, methods=['get'], url_path='device-passcode')
+    def device_passcode(self, request, pk=None):
+        ticket = self.get_object()
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response(
+                {"detail": "Tylko przypisany pracownik może ujawnić hasło urządzenia."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response({"device_passcode": ticket.device_passcode})
 
     @action(detail=True, methods=['post'], url_path='wait-for-parts')
     @transaction.atomic
@@ -171,8 +273,45 @@ class TicketView(viewsets.ModelViewSet):
             )
 
         ticket.status = previous_status
+        if previous_status == Ticket.Status.IN_PROGRESS:
+            try:
+                reserve_ticket_parts(ticket)
+            except serializers.ValidationError as error:
+                return Response(error.detail, status=status.HTTP_409_CONFLICT)
         ticket.status_before_waiting_for_parts = None
         ticket.save(user=request.user, comment=request.data.get('comment', 'Wznowiono obsługę zgłoszenia'))
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='resume-repair')
+    @transaction.atomic
+    def resume_repair(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response({"detail": "Tylko przypisany pracownik może wznowić zgłoszenie."}, status=status.HTTP_403_FORBIDDEN)
+        if ticket.status != Ticket.Status.WAITING_FOR_PARTS:
+            return Response({"detail": "Naprawę można wznowić tylko dla zgłoszenia oczekującego na części."}, status=status.HTTP_409_CONFLICT)
+        try:
+            reserve_ticket_parts(ticket)
+        except serializers.ValidationError as error:
+            return Response(error.detail, status=status.HTTP_409_CONFLICT)
+
+        ticket.status = Ticket.Status.IN_PROGRESS
+        ticket.status_before_waiting_for_parts = None
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Wznowiono naprawę'))
+        return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='return-to-diagnosis')
+    @transaction.atomic
+    def return_to_diagnosis(self, request, pk=None):
+        ticket = Ticket.objects.select_for_update().get(pk=self.get_object().pk)
+        if not technician_can_edit_ticket(request.user, ticket):
+            return Response({"detail": "Tylko przypisany pracownik może zmienić zgłoszenie."}, status=status.HTTP_403_FORBIDDEN)
+        if ticket.status != Ticket.Status.WAITING_FOR_PARTS:
+            return Response({"detail": "Do diagnozy można wrócić tylko dla zgłoszenia oczekującego na części."}, status=status.HTTP_409_CONFLICT)
+
+        ticket.status = Ticket.Status.DIAGNOSIS
+        ticket.status_before_waiting_for_parts = None
+        ticket.save(user=request.user, comment=request.data.get('comment', 'Wrócono do diagnozy'))
         return Response(TicketReadSerializer(ticket).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -231,7 +370,7 @@ class TicketPartView(viewsets.ModelViewSet):
             return TicketPart.objects.none()
 
         user = self.request.user
-        queryset = TicketPart.objects.select_related('ticket','part')
+        queryset = TicketPart.objects.select_related('ticket','part').order_by('-id')
 
         if getattr(user,'role',None) == 'OWNER':
             return queryset
@@ -256,15 +395,27 @@ class TicketPartView(viewsets.ModelViewSet):
             raise PermissionDenied('Tylko przypisany pracownik może dodawać części.')
         if self.request.user.role != 'OWNER' and ticket.location_id != self.request.user.location_id:
             raise PermissionDenied('Nie możesz dodać części do zgłoszenia z innej lokalizacji.')
+        if ticket.status not in [
+            Ticket.Status.DIAGNOSIS,
+            Ticket.Status.WAITING_FOR_PARTS,
+            Ticket.Status.IN_PROGRESS,
+        ]:
+            raise serializers.ValidationError(
+                'Części można dodawać tylko podczas diagnozy, oczekiwania na części lub naprawy.'
+            )
         ticket_part = serializer.save()
 
         stock = Stock.objects.select_for_update().filter(location=ticket_part.ticket.location,part=ticket_part.part).first()
 
-        if not stock or stock.quantity <ticket_part.quantity:
+        if not stock or stock.quantity < ticket_part.quantity:
+            if ticket.status in [Ticket.Status.DIAGNOSIS, Ticket.Status.WAITING_FOR_PARTS]:
+                return
             raise serializers.ValidationError({"quantity":"Brak wystarczającej liczby części w magazynie oddziału."})
 
         stock.quantity -= ticket_part.quantity
         stock.save()
+        ticket_part.stock_reserved = True
+        ticket_part.save(update_fields=['stock_reserved'])
 
     @transaction.atomic
     def perform_destroy(self, instance):
@@ -274,7 +425,7 @@ class TicketPartView(viewsets.ModelViewSet):
             location=instance.ticket.location,
             part=instance.part,
         ).first()
-        if stock:
+        if stock and instance.stock_reserved:
             stock.quantity += instance.quantity
             stock.save(update_fields=['quantity'])
         instance.delete()
@@ -289,7 +440,7 @@ class TicketServiceView(viewsets.ModelViewSet):
             return TicketService.objects.none()
 
         user = self.request.user
-        queryset = TicketService.objects.select_related('ticket')
+        queryset = TicketService.objects.select_related('ticket').order_by('-id')
         if getattr(user, 'role', None) == 'OWNER':
             return queryset
         if user.location:
@@ -320,6 +471,8 @@ class TicketServiceView(viewsets.ModelViewSet):
 class PublicTicketStatusView(GenericAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicTicketStatusSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_tracking'
 
     @extend_schema(responses=PublicTicketStatusSerializer)
     def post(self, request):
@@ -358,6 +511,8 @@ class PublicTicketStatusView(GenericAPIView):
 class PublicEmailCodeRequestView(GenericAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicEmailRequestSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_tracking'
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -410,6 +565,8 @@ class PublicEmailCodeRequestView(GenericAPIView):
 class PublicEmailCodeVerifyView(GenericAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicEmailVerifySerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'email_verify'
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -439,6 +596,8 @@ class PublicEmailCodeVerifyView(GenericAPIView):
 
 class PublicTicketListView(GenericAPIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_tracking'
 
     def post(self, request):
         tracking_token = request.data.get('tracking_token')
@@ -451,13 +610,18 @@ class PublicTicketListView(GenericAPIView):
                 salt='public-ticket-tracking',
                 max_age=15 * 60,
             )
-        except signing.BadSignature:
+        except (signing.BadSignature, TypeError, ValueError):
+            return Response({'detail': 'Token śledzenia jest nieprawidłowy lub wygasł.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not isinstance(payload, dict) or not payload.get('email'):
             return Response({'detail': 'Token śledzenia jest nieprawidłowy lub wygasł.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         tickets = Ticket.objects.filter(
             client__email__iexact=payload['email'],
         ).select_related('location').order_by('-updated_at')
-        return Response(PublicTicketSummarySerializer(tickets, many=True).data)
+        page = self.paginate_queryset(tickets)
+        serializer = PublicTicketSummarySerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
 class ServiceView(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]

@@ -2,16 +2,19 @@ import React, { useEffect, useState } from 'react';
 import api from '../../../api/axios';
 import { EmployeeModal } from '../../../components/private/employeeModal';
 import type { Employee, UserLocation } from '../../../types/auth';
+import { useAuth } from '../../../context/AuthContext';
+import { getRoleLabel } from '../../../utils/roles';
 
 type Location = UserLocation;
 
-export const Employees: React.FC = () => {
+export const Employees: React.FC<{ branchOnly?: boolean }> = ({ branchOnly = false }) => {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   // Stany filtrowania i modali
-  const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
+  const [selectedLocation, setSelectedLocation] = useState<string>(branchOnly ? String(user?.location || '') : 'ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<Employee | null>(null);
 
@@ -19,11 +22,11 @@ export const Employees: React.FC = () => {
     setIsLoading(true);
     try {
       const [usersRes, locsRes] = await Promise.all([
-        api.get<Employee[]>('/accounts/users/'),
-        api.get<Location[]>('/accounts/locations/'),
+        api.get<{ results: Employee[] }>('/accounts/users/'),
+        api.get<{ results: Location[] }>('/accounts/locations/'),
       ]);
-      setEmployees(usersRes.data);
-      setLocations(locsRes.data);
+      setEmployees(usersRes.data.results);
+      setLocations(branchOnly ? locsRes.data.results.filter(location => location.id === user?.location) : locsRes.data.results);
     } catch (err) {
       console.error('Błąd pobierania danych:', err);
     } finally {
@@ -33,7 +36,7 @@ export const Employees: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [branchOnly, user?.location]);
 
   // Filtrowanie listy użytkowników
   const filteredEmployees = employees.filter((emp) => {
@@ -59,8 +62,7 @@ export const Employees: React.FC = () => {
         <h1 className="text-2xl font-bold text-slate-800">Zarządzanie Pracownikami</h1>
 
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          {/* Filtr Oddziałów */}
-          <select
+          {!branchOnly && <select
             value={selectedLocation}
             onChange={(e) => setSelectedLocation(e.target.value)}
             className="border rounded-lg px-3 py-2 text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500"
@@ -70,7 +72,7 @@ export const Employees: React.FC = () => {
             {locations.map((loc) => (
               <option key={loc.id} value={loc.id}>{loc.name}</option>
             ))}
-          </select>
+          </select>}
 
           {/* Przycisk Dodaj */}
           <button
@@ -109,7 +111,7 @@ export const Employees: React.FC = () => {
                   </td>
                   <td className="p-4">
                     <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                      {emp.role_display || emp.role}
+                      {emp.role_display || getRoleLabel(emp.role)}
                     </span>
                   </td>
                   <td className="p-4 text-slate-600">

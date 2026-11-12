@@ -44,6 +44,11 @@ class TicketPartWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Wartość musi być większa od zera")
         return value
 
+    def validate_price_at_use(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Cena nie może być ujemna.')
+        return value
+
     def create(self,validated_data):
         if 'price_at_use' not in validated_data:
             validated_data['price_at_use'] = validated_data['part'].sell_price_gross
@@ -77,7 +82,7 @@ class TicketReadSerializer(serializers.ModelSerializer):
         model = Ticket
         fields = [
             'id', 'ticket_code', 'client', 'location', 'assigned_worker', 'created_by',
-            'device_name', 'serial_number', 'device_passcode', 
+            'device_name', 'serial_number',
             'problem_description', 'diagnosis_note', 'status', 'status_display',
             'estimated_cost', 'final_cost', 'total_parts_cost',
             'total_services_cost', 'total_cost', 'used_parts', 'used_services',
@@ -109,6 +114,7 @@ class TicketWriteSerializer(serializers.ModelSerializer):
             'problem_description', 'diagnosis_note', 'status',
             'estimated_cost', 'final_cost', 'comment'
         ]
+        extra_kwargs = {'status': {'write_only': True, 'required': False}}
 
     def create(self, validated_data):
         user = validated_data.pop('user', None)
@@ -129,7 +135,7 @@ class TicketWriteSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
         location = attrs.get('location', self.instance.location if self.instance else None)
-        if self.instance and 'status' in attrs:
+        if 'status' in attrs:
             raise serializers.ValidationError({
                 'status': 'Status należy zmieniać przez dedykowany endpoint.'
             })
@@ -158,6 +164,16 @@ class TicketWriteSerializer(serializers.ModelSerializer):
                     "final_cost": f"Koszt końcowy ({final_cost}) nie może być niższy niż suma części i usług ({total_cost})."
                 })
         return attrs
+
+    def validate_estimated_cost(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Koszt nie może być ujemny.')
+        return value
+
+    def validate_final_cost(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Koszt nie może być ujemny.')
+        return value
 
 
 class PublicTicketStatusSerializer(serializers.Serializer):

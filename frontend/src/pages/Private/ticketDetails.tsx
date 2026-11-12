@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { addTicketPart, addTicketService, changeTicketStatus, claimTicket, deleteTicketPart, deleteTicketService, getServicePricing, getTicket, resumeTicketWork, takeOverTicket, updateTicket, updateTicketCosts, waitForTicketParts } from '../../api/service';
+import { addTicketPart, addTicketService, changeTicketStatus, claimTicket, deleteTicketPart, deleteTicketService, getServicePricing, getTicket, resendReadyEmail, revealDevicePasscode, resumeTicketRepair, returnTicketToDiagnosis, takeOverTicket, updateTicket, updateTicketCosts, waitForTicketParts } from '../../api/service';
 import { getStocks } from '../../api/inventory';
 import { useAuth } from '../../context/AuthContext';
 import type { Stock } from '../../types/inventory';
@@ -23,6 +23,7 @@ export const TicketDetails: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [diagnosis, setDiagnosis] = useState('');
+  const [clientApproved, setClientApproved] = useState(false);
   const [customEstimate, setCustomEstimate] = useState('');
   const [estimateServices, setEstimateServices] = useState<EstimateService[]>([]);
   const [estimateParts, setEstimateParts] = useState<EstimatePart[]>([]);
@@ -32,6 +33,8 @@ export const TicketDetails: React.FC = () => {
   const [estimateSearch, setEstimateSearch] = useState('');
   const [estimateQuantity, setEstimateQuantity] = useState('1');
   const [finalCost, setFinalCost] = useState('');
+  const [devicePasscode, setDevicePasscode] = useState<string | null>(null);
+  const [revealingPasscode, setRevealingPasscode] = useState(false);
 
   const loadTicket = async () => {
     if (!ticketId) return;
@@ -39,6 +42,7 @@ export const TicketDetails: React.FC = () => {
     try {
       const loadedTicket = await getTicket(Number(ticketId));
       setTicket(loadedTicket);
+      setDevicePasscode(null);
       setDiagnosis(loadedTicket.diagnosis_note);
       setFinalCost(loadedTicket.final_cost ?? '');
       setEstimateServices(loadedTicket.used_services.map(service => ({
@@ -79,7 +83,7 @@ export const TicketDetails: React.FC = () => {
     if (ticket && (ticket.status === 'NEW' || ticket.status === 'DIAGNOSIS' || workStatuses.includes(ticket.status))) {
       Promise.all([getStocks(), getServicePricing()])
         .then(([stockData, serviceData]) => {
-          setStocks(stockData);
+          setStocks(stockData.results);
           setServices(serviceData.filter(service => service.is_available));
         })
         .catch(() => {
@@ -95,8 +99,16 @@ export const TicketDetails: React.FC = () => {
     try {
       await action();
       await loadTicket();
-    } catch {
-      setError('Nie udało się zapisać zmian. Sprawdź dane i uprawnienia.');
+    } catch (err: any) {
+      const responseData = err.response?.data;
+      const partsError = Array.isArray(responseData?.parts)
+        ? responseData.parts.join(' ')
+        : responseData?.parts;
+      setError(
+        partsError ||
+        responseData?.detail ||
+        'Nie udało się zapisać zmian. Sprawdź dane i uprawnienia.',
+      );
     } finally {
       setSaving(false);
     }
@@ -123,8 +135,19 @@ export const TicketDetails: React.FC = () => {
     await updateTicketCosts(ticket.id, { estimated_cost: calculatedEstimate });
   };
 
+  const saveDiagnosisDraft = () => {
+    if (!ticket) return;
+    void runAction(async () => {
+      await saveEstimate();
+      await updateTicket(ticket.id, { diagnosis_note: diagnosis });
+    });
+  };
+
   const saveDiagnosisAndStart = () => {
     if (!ticket) return;
+    if (!window.confirm('Przed zmianą statusu upewnij się, że klient zaakceptował kosztorys. Czy chcesz zmienić status zgłoszenia?')) {
+      return;
+    }
     void runAction(async () => {
       await saveEstimate();
       await updateTicket(ticket.id, { diagnosis_note: diagnosis });
@@ -147,12 +170,37 @@ export const TicketDetails: React.FC = () => {
 
   const waitForParts = () => {
     if (!ticket) return;
-    void runAction(() => waitForTicketParts(ticket.id));
+    if (!window.confirm('Przed zmianą statusu upewnij się, że klient zaakceptował kosztorys. Czy chcesz zmienić status zgłoszenia?')) {
+      return;
+    }
+    void runAction(async () => {
+      await saveEstimate();
+      await updateTicket(ticket.id, { diagnosis_note: diagnosis });
+      return waitForTicketParts(ticket.id);
+    });
   };
 
-  const resumeWork = () => {
+  const rejectTicket = () => {
     if (!ticket) return;
-    void runAction(() => resumeTicketWork(ticket.id));
+    if (!window.confirm('Czy na pewno chcesz anulować zgłoszenie i oznaczyć je jako odrzucone?')) {
+      return;
+    }
+    void runAction(() => changeTicketStatus(ticket.id, 'REJECTED'));
+  };
+
+  const resendReadyNotification = () => {
+    if (!ticket) return;
+    void runAction(() => resendReadyEmail(ticket.id));
+  };
+
+  const resumeRepair = () => {
+    if (!ticket) return;
+    void runAction(() => resumeTicketRepair(ticket.id));
+  };
+
+  const returnToDiagnosis = () => {
+    if (!ticket) return;
+    void runAction(() => returnTicketToDiagnosis(ticket.id));
   };
 
   const startDiagnosis = () => {
@@ -163,6 +211,20 @@ export const TicketDetails: React.FC = () => {
   const takeOver = () => {
     if (!ticket) return;
     void runAction(() => takeOverTicket(ticket.id));
+  };
+
+  const revealPasscode = async () => {
+    if (!ticket) return;
+    setRevealingPasscode(true);
+    setError('');
+    try {
+      const response = await revealDevicePasscode(ticket.id);
+      setDevicePasscode(response.device_passcode);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Nie udało się ujawnić hasła urządzenia.');
+    } finally {
+      setRevealingPasscode(false);
+    }
   };
 
   const addSelectedService = (service: ServicePricing) => {
@@ -178,7 +240,8 @@ export const TicketDetails: React.FC = () => {
 
   const addSelectedPart = (stock: Stock) => {
     const quantity = Number(estimateQuantity);
-    if (quantity < 1 || quantity > stock.quantity) return;
+    const canUseUnavailableStock = ticket?.status === 'DIAGNOSIS' || ticket?.status === 'PARTS';
+    if (quantity < 1 || (!canUseUnavailableStock && quantity > stock.quantity)) return;
     setEstimateParts(current => [...current, {
       key: `part-new-${stock.part.id}-${Date.now()}`,
       partId: stock.part.id,
@@ -320,6 +383,20 @@ export const TicketDetails: React.FC = () => {
                 <h2 className="col-span-2 pb-2 text-base font-semibold text-slate-800">Informacje o urządzeniu</h2>
                 <p className="col-span-2"><b>Urządzenie:</b> {ticket.device_name}</p>
                 <p className=""><b>Numer seryjny:</b> {ticket.serial_number || 'Brak'}</p>
+                <div className="flex items-center gap-2">
+                  <b>Hasło urządzenia:</b>
+                  <span>{devicePasscode === null ? '••••••••' : (devicePasscode || 'Brak')}</span>
+                  {devicePasscode === null && canEditTicket && (
+                    <button
+                      type="button"
+                      disabled={revealingPasscode}
+                      onClick={revealPasscode}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {revealingPasscode ? 'Ładowanie...' : 'Pokaż'}
+                    </button>
+                  )}
+                </div>
             </div>
         <div className="mt-4 grid gap-2 text-sm text-slate-700 md:grid-cols-2">
           <p><b>Zgłoszenie utworzył:</b> {ticket.created_by?.full_name || 'Nieznany użytkownik'}</p>
@@ -349,11 +426,31 @@ export const TicketDetails: React.FC = () => {
             />
             <button type="button" disabled={saving} onClick={() => setEstimateModal('service')} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Dodaj usługę</button>
             <button type="button" disabled={saving} onClick={() => setEstimateModal('part')} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Dodaj część</button>
-            <button type="button" disabled={saving || !diagnosis.trim()} onClick={saveDiagnosisAndStart} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-              Zapisz diagnozę i rozpocznij naprawę
-            </button>
           </div>
           {estimateTable}
+          <label className="mt-4 flex items-center gap-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={clientApproved}
+              onChange={event => setClientApproved(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            Zatwierdzone przez klienta?
+          </label>
+          <div className="mt-4 flex flex-wrap gap-3 border-t border-blue-200 pt-4">
+            <button type="button" disabled={saving} onClick={saveDiagnosisDraft} className="rounded border border-slate-400 bg-white px-4 py-2 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              Zapisz wersję roboczą
+            </button>
+            <button type="button" disabled={saving || !diagnosis.trim() || !clientApproved} onClick={saveDiagnosisAndStart} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500">
+              Rozpocznij naprawę
+            </button>
+            <button type="button" disabled={saving || !clientApproved} onClick={waitForParts} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500">
+              Oczekuj na części
+            </button>
+            <button type="button" disabled={saving} onClick={rejectTicket} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">
+              Anuluj zgłoszenie
+            </button>
+          </div>
         </section>
       )}
 
@@ -401,9 +498,9 @@ export const TicketDetails: React.FC = () => {
             {ticket.status === 'DIAGNOSIS' && <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Rozpocznij naprawę</button>}
             {ticket.status === 'IN_PROGRESS' && <button type="button" disabled={saving} onClick={() => moveStatus('READY')} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Gotowe do odbioru</button>} 
             {(ticket.status === 'DIAGNOSIS' || ticket.status === 'IN_PROGRESS') && <button type="button" disabled={saving} onClick={waitForParts} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">Oczekuj na części</button>}
-            {ticket.status === 'PARTS' && <button type="button" disabled={saving} onClick={resumeWork} className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50">{ticket.status_before_waiting_for_parts === 'DIAGNOSIS' ? 'Wznów diagnozę' : 'Wznów naprawę'}</button>}
-            {/* {(ticket.status === 'DIAGNOSIS' || ticket.status === 'PARTS') && <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Rozpocznij naprawę</button>}*/}
-            <button type="button" disabled={saving} onClick={() => moveStatus('REJECTED')} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Odrzuć</button>
+            {ticket.status === 'PARTS' && <button type="button" disabled={saving} onClick={resumeRepair} className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">Wznów naprawę</button>}
+            {ticket.status === 'PARTS' && <button type="button" disabled={saving} onClick={returnToDiagnosis} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Wróć do diagnozy</button>}
+            <button type="button" disabled={saving} onClick={rejectTicket} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Odrzuć</button>
           </div>
         </section>
       )}
@@ -470,6 +567,7 @@ export const TicketDetails: React.FC = () => {
                 <input type="number" min={ticket.total_cost} placeholder={String(ticket.total_cost)} step="0.01" onChange={event => setFinalCost(event.target.value)} value={finalCost} className="w-full rounded border border-slate-300 p-2" />
               </label>
               <button type="button" disabled={saving} onClick={closeTicket} className="rounded bg-emerald-600 px-4 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Zamknij zgłoszenie</button>
+              <button type="button" disabled={saving} onClick={resendReadyNotification} className="rounded border border-blue-300 px-4 py-2 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Wyślij ponownie e-mail</button>
               <button type="button" disabled={saving} onClick={() => moveStatus('IN_PROGRESS')} className="rounded border border-red-300 px-4 py-2 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Cofnij gotowość</button>
             </div>
           )}
@@ -509,7 +607,7 @@ export const TicketDetails: React.FC = () => {
                   ))
               ) : (
                 stocks
-                  .filter(stock => `${stock.part.name} ${stock.part.sku} ${stock.part.ean ?? ''}`.toLowerCase().includes(estimateSearch.toLowerCase()) && stock.quantity > 0)
+                  .filter(stock => `${stock.part.name} ${stock.part.sku} ${stock.part.ean ?? ''}`.toLowerCase().includes(estimateSearch.toLowerCase()))
                   .map(stock => (
                     <button key={stock.part.id} type="button" onClick={() => addSelectedPart(stock)} className="flex w-full items-center justify-between p-3 text-left hover:bg-slate-50">
                       <span><b>{stock.part.name}</b><span className="block text-sm text-slate-500">{stock.part.sku} · dostępne: {stock.quantity}</span></span>

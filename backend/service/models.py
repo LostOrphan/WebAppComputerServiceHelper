@@ -125,6 +125,7 @@ class TicketPart(models.Model):
     part = models.ForeignKey('inventory.Part', on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
     price_at_use = models.DecimalField(max_digits=8, decimal_places=2)
+    stock_reserved = models.BooleanField(default=False)
 
 
 class TicketService(models.Model):

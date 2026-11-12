@@ -47,7 +47,6 @@ export interface Ticket {
   created_by: TicketWorker | null;
   device_name: string;
   serial_number: string;
-  device_passcode: string;
   problem_description: string;
   diagnosis_note: string;
   status: TicketStatus;
@@ -71,6 +70,13 @@ export interface ClientOption {
   last_name: string;
   phone_number: string | null;
   email?: string | null;
+}
+
+export interface ManagedClient extends ClientOption {
+  full_name: string;
+  is_anonymized: boolean;
+  active_tickets_count: number;
+  created_at: string;
 }
 
 export interface PartOption {

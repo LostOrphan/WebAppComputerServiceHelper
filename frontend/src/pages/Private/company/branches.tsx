@@ -12,8 +12,8 @@ export const Branches: React.FC = () => {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const branchesResponse = await api.get<Branch[]>('/accounts/locations/');
-      setBranches(branchesResponse.data);
+      const branchesResponse = await api.get<{ results: Branch[] }>('/accounts/locations/');
+      setBranches(branchesResponse.data.results);
     } catch (error) {
       console.error('Błąd pobierania oddziałów:', error);
     } finally {
