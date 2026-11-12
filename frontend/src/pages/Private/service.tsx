@@ -37,8 +37,10 @@ export const Service: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [matchedClient, setMatchedClient] = useState<ClientOption | null>(null);
+  const [suggestedClients, setSuggestedClients] = useState<ClientOption[]>([]);
+  const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
+  const [clientLookup, setClientLookup] = useState<{ type: 'phone' | 'email'; value: string } | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'ALL' | TicketStatus>('ACTIVE');
   const [showCreate, setShowCreate] = useState(false);
@@ -105,15 +107,27 @@ export const Service: React.FC = () => {
 
   const clearCreateForm = () => {
     setForm(emptyForm);
-    setMatchedClient(null);
+    setSuggestedClients([]);
+    setSelectedClient(null);
+    setClientLookup(null);
     setError('');
   };
 
   useEffect(() => {
-    const phone = form.phone_number.trim();
-    const normalizedPhone = normalizePolishPhone(phone);
-    if (normalizedPhone.length !== 11 || !normalizedPhone.startsWith('48')) {
-      setMatchedClient(null);
+    if (!clientLookup) {
+      setSuggestedClients([]);
+      setIsSearchingClient(false);
+      return;
+    }
+
+    const query = clientLookup.type === 'phone'
+      ? normalizePolishPhone(clientLookup.value.trim())
+      : clientLookup.value.trim().toLowerCase();
+    const isValidQuery = clientLookup.type === 'phone'
+      ? query.length >= 3
+      : query.includes('@');
+    if (!isValidQuery) {
+      setSuggestedClients([]);
       setIsSearchingClient(false);
       return;
     }
@@ -122,23 +136,12 @@ export const Service: React.FC = () => {
     const timeoutId = window.setTimeout(async () => {
       setIsSearchingClient(true);
       try {
-        const matches = (await getClients(normalizedPhone)).results;
+        const matches = (await getClients(query)).results;
         if (!isCancelled) {
-          const exactMatch = matches.find(client => (
-            client.phone_number?.replace(/\D/g, '') === normalizedPhone
-          ));
-          setMatchedClient(exactMatch ?? null);
-          if (exactMatch) {
-            setForm(current => ({
-              ...current,
-              first_name: exactMatch.first_name,
-              last_name: exactMatch.last_name,
-              email: exactMatch.email ?? '',
-            }));
-          }
+          setSuggestedClients(matches);
         }
       } catch {
-        if (!isCancelled) setMatchedClient(null);
+        if (!isCancelled) setSuggestedClients([]);
       } finally {
         if (!isCancelled) setIsSearchingClient(false);
       }
@@ -148,53 +151,14 @@ export const Service: React.FC = () => {
       isCancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [form.phone_number]);
-
-  useEffect(() => {
-    const email = form.email.trim().toLowerCase();
-    if (!email.includes('@') || !email.includes('.')) {
-      return;
-    }
-
-    let isCancelled = false;
-    const timeoutId = window.setTimeout(async () => {
-      setIsSearchingClient(true);
-      try {
-        const matches = (await getClients(email)).results;
-        if (!isCancelled) {
-          const exactMatch = matches.find(client => (
-            client.email?.trim().toLowerCase() === email
-          ));
-          setMatchedClient(exactMatch ?? null);
-          if (exactMatch) {
-            setForm(current => ({
-              ...current,
-              first_name: exactMatch.first_name,
-              last_name: exactMatch.last_name,
-              email: exactMatch.email ?? '',
-              phone_number: exactMatch.phone_number ?? '',
-            }));
-          }
-        }
-      } catch {
-        if (!isCancelled) setMatchedClient(null);
-      } finally {
-        if (!isCancelled) setIsSearchingClient(false);
-      }
-    }, 300);
-
-    return () => {
-      isCancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [form.email]);
+  }, [clientLookup]);
 
   const submitTicket = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!user?.location) return;
 
     try {
-      const client = matchedClient ?? await createClient({
+      const client = selectedClient ?? await createClient({
         first_name: form.first_name,
         last_name: form.last_name,
         email: form.email || undefined,
@@ -207,7 +171,9 @@ export const Service: React.FC = () => {
       });
       setTickets(current => [ticket, ...current]);
       setForm(emptyForm);
-      setMatchedClient(null);
+      setSuggestedClients([]);
+      setSelectedClient(null);
+      setClientLookup(null);
       setShowCreate(false);
       setError('');
     } catch {
@@ -300,7 +266,8 @@ export const Service: React.FC = () => {
 
       {showCreate && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form onSubmit={submitTicket} className="w-full max-w-lg space-y-4 rounded-lg bg-white p-6 shadow-xl">
+          <div className="relative w-full max-w-6xl">
+          <form onSubmit={submitTicket} className="mx-auto w-full max-w-lg space-y-4 rounded-lg bg-white p-6 shadow-xl">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-slate-800">Nowe zgłoszenie</h2>
               <button
@@ -319,55 +286,42 @@ export const Service: React.FC = () => {
               placeholder="Numer telefonu"
               value={form.phone_number}
               onChange={event => {
-                setForm({
-                  ...form,
-                  phone_number: event.target.value,
-                  first_name: '',
-                  last_name: '',
-                  email: '',
-                });
-                setMatchedClient(null);
+                setForm(current => ({ ...current, phone_number: event.target.value }));
+                setClientLookup({ type: 'phone', value: event.target.value });
+              setSuggestedClients([]);
+                setSelectedClient(null);
               }}
               className="w-full rounded border border-slate-300 p-2"
             />
-            {isSearchingClient && <p className="text-sm text-slate-500">Sprawdzanie klienta...</p>}
-            {matchedClient && (
-              <p className="rounded border border-emerald-200 bg-emerald-50 p-2 text-sm text-emerald-700">
-                Znaleziono klienta: {matchedClient.first_name} {matchedClient.last_name}
-              </p>
-            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input
                 required
                 placeholder="Imię klienta"
                 value={form.first_name}
-                onChange={event => setForm({ ...form, first_name: event.target.value })}
-                readOnly={Boolean(matchedClient)}
+                onChange={event => setForm(current => ({ ...current, first_name: event.target.value }))}
+                readOnly={Boolean(selectedClient)}
                 className="rounded border border-slate-300 p-2"
               />
               <input
                 required
                 placeholder="Nazwisko klienta"
                 value={form.last_name}
-                onChange={event => setForm({ ...form, last_name: event.target.value })}
-                readOnly={Boolean(matchedClient)}
+                onChange={event => setForm(current => ({ ...current, last_name: event.target.value }))}
+                readOnly={Boolean(selectedClient)}
                 className="rounded border border-slate-300 p-2"
               />
             </div>
             <input
               type="email"
-              placeholder="Adres e-mail (opcjonalnie)"
+              placeholder="Adres e-mail"
               value={form.email}
               onChange={event => {
-                setForm({
-                  ...form,
-                  email: event.target.value,
-                  first_name: '',
-                  last_name: '',
-                });
-                setMatchedClient(null);
+                setForm(current => ({ ...current, email: event.target.value }));
+                setClientLookup({ type: 'email', value: event.target.value });
+                setSuggestedClients([]);
+                setSelectedClient(null);
               }}
-              readOnly={Boolean(matchedClient)}
+              readOnly={Boolean(selectedClient)}
               className="w-full rounded border border-slate-300 p-2"
             />
 
@@ -412,6 +366,59 @@ export const Service: React.FC = () => {
               </button>
             </div>
           </form>
+          {(isSearchingClient || suggestedClients.length > 0) && (
+            <aside className="mt-4 max-h-28rem w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 shadow-xl md:absolute md:left-[calc(50%+17rem)] md:top-6 md:mt-0 md:w-72">
+              {isSearchingClient ? (
+                <p className="text-sm text-slate-500">Sprawdzanie klienta...</p>
+              ) : (
+                <>
+                  <p className="mb-3 text-sm font-semibold text-slate-800">
+                    Znaleziono klientów ({suggestedClients.length})
+                  </p>
+                  <div className="space-y-3">
+                    {suggestedClients.map(client => (
+                      <div key={client.id} className="rounded border border-slate-200 p-3">
+                        <p className="text-sm font-semibold text-slate-800">
+                          {client.first_name} {client.last_name}
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          {client.email || client.phone_number}
+                        </p>
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForm(current => ({
+                                ...current,
+                                first_name: client.first_name,
+                                last_name: client.last_name,
+                                email: client.email ?? '',
+                                phone_number: client.phone_number ?? '',
+                              }));
+                              setSelectedClient(client);
+                              setSuggestedClients([]);
+                              setClientLookup(null);
+                            }}
+                            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                          >
+                            Użyj danych
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSuggestedClients(current => current.filter(item => item.id !== client.id))}
+                            className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Odrzuć
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </aside>
+          )}
+          </div>
         </div>
       )}
     </div>
