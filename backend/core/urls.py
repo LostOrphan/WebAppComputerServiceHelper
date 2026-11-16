@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path, include
-from .auth_views import ThrottledTokenObtainPairView, ThrottledTokenRefreshView
+from .auth_views import LogoutView, ThrottledTokenObtainPairView, ThrottledTokenRefreshView
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
@@ -12,6 +12,7 @@ urlpatterns = [
     # JWT
     path('api/auth/token/', ThrottledTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/auth/token/refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
+    path('api/auth/logout/', LogoutView.as_view(), name='logout'),
 
     # Moduły
     path('api/accounts/', include('accounts.urls')),

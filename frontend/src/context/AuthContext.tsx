@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect,type ReactNode } from 'react';
-import api from '../api/axios';
+import api, { refreshAccessToken, setAccessToken } from '../api/axios';
 import type { AuthTokens, LoginCredentials, User } from '../types/auth';
 
 interface AuthContextType{
@@ -27,25 +27,20 @@ export const AuthProvider: React.FC<{children: ReactNode}>=({children})=>{
         }
     };
     useEffect(()=>{
-        const token = localStorage.getItem('access_token');
-        if(token){
-            fetchCurrentUser();
-        }else{
-            setIsLoading(false);
-        }
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        void refreshAccessToken()
+            .then(fetchCurrentUser)
+            .catch(() => setIsLoading(false));
     },[]);
     const login = async(credentials: LoginCredentials)=>{
         const response = await api.post<AuthTokens>('auth/token/', credentials);
-        const{access,refresh} = response.data;
-
-        localStorage.setItem('access_token',access);
-        localStorage.setItem('refresh_token',refresh);
-
+        setAccessToken(response.data.access);
         await fetchCurrentUser();
     };
     const logout = () => {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
+        void api.post('auth/logout/');
+        setAccessToken(null);
         setUser(null);
     };
     return(
