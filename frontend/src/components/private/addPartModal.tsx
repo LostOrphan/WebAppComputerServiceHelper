@@ -16,6 +16,17 @@ interface AddPartModalProps {
   partToEdit?: Part | null;
 }
 
+const createEmptyFormData = (initialEan = ''): CreatePartPayload => ({
+  name: '',
+  brand: '',
+  sku: '',
+  ean: initialEan,
+  category: 0,
+  default_buy_price_net: '',
+  sell_price_gross: '',
+  unit: 'PCS',
+});
+
 export const AddPartModal: React.FC<AddPartModalProps> = ({
   isOpen, onClose, onSuccess, initialEan, partToEdit = null
 }) => {
@@ -24,18 +35,8 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [specificationRows, setSpecificationRows] = useState<SpecificationRow[]>([]);
 
-  const [formData, setFormData] = useState<CreatePartPayload>({
-    name: '',
-    brand: '',
-    sku: '',
-    ean: '',
-    category: 0,
-    default_buy_price_net: '',
-    sell_price_gross: '',
-    unit: 'PCS'
-  });
+  const [formData, setFormData] = useState<CreatePartPayload>(createEmptyFormData());
 
-  // Pobieranie kategorii oraz ustawianie EAN po otwarciu
   useEffect(() => {
     if (isOpen) {
       setFormData(partToEdit ? {
@@ -48,24 +49,26 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
         sell_price_gross: partToEdit.sell_price_gross,
         unit: partToEdit.unit,
         specifications: partToEdit.specifications,
-      } : {
-        ...formData,
-        ean: initialEan || '',
-        sku: ''
-      });
+      } : createEmptyFormData(initialEan));
       setSpecificationRows(partToEdit
         ? Object.entries(partToEdit.specifications || {}).map(([name, value]) => ({ name, value: String(value) }))
         : []);
       setError(null);
-      
-      // Pobierz kategorie, jeśli jeszcze ich nie mamy
-      if (categories.length === 0) {
-        getCategories()
-          .then(data => setCategories(data))
-          .catch(() => setError('Nie udało się pobrać kategorii.'));
-      }
+    } else {
+      setFormData(createEmptyFormData());
+      setSpecificationRows([]);
+      setError(null);
+      setIsSubmitting(false);
     }
-  }, [isOpen, initialEan, categories.length, partToEdit]);
+  }, [isOpen, initialEan, partToEdit]);
+
+  useEffect(() => {
+    if (!isOpen || categories.length > 0) return;
+
+    getCategories()
+      .then(data => setCategories(data))
+      .catch(() => setError('Nie udało się pobrać kategorii.'));
+  }, [isOpen, categories.length]);
 
   if (!isOpen) return null;
 
@@ -92,8 +95,8 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
       } else {
         await createPart(payload);
       }
-      onSuccess(); // Odświeża tabelę w Inventory.tsx
-      onClose();   // Zamyka modal
+      onSuccess();
+      onClose();
     } catch (err: any) {
       setError('Nie udało się dodać produktu. Sprawdź, czy formularz jest poprawny.');
     } finally {

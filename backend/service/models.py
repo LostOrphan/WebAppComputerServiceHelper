@@ -210,25 +210,3 @@ class LocationServicePrice(models.Model):
         if self.custom_price is not None:
             return self.custom_price
         return self.service.default_price
-# class TicketWorkSession(models.Model):
-#     ticket = models.ForeignKey(
-#         Ticket,
-#         on_delete=models.CASCADE,
-#         related_name="work_sessions",
-#     )
-#     worker = models.ForeignKey(
-#         settings.AUTH_USER_MODEL,
-#         on_delete=models.PROTECT,
-#         related_name="ticket_work_sessions",
-#     )
-#     started_at = models.DateTimeField(auto_now_add=True)
-#     ended_at = models.DateTimeField(null=True, blank=True)
-#     last_seen_at = models.DateTimeField(auto_now=True)
-#     class Meta:
-#         constraints = [
-#             models.UniqueConstraint(
-#                 fields=["ticket"],
-#                 condition=Q(ended_at__isnull=True),
-#                 name="one_active_work_session_per_ticket",
-#             )
-#         ]

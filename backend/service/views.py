@@ -637,7 +637,6 @@ class ServiceView(viewsets.ModelViewSet):
         return ServicePricingWriteSerializer
 
     def get_queryset(self):
-        # Zwracamy aktywne usługi
         location = self.request.user.location
         location_prices = LocationServicePrice.objects.none()
         if location:
@@ -655,7 +654,6 @@ class ServiceView(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        # Automatycznie przekazujemy lokację zalogowanego pracownika do serializera
         context['location'] = self.request.user.location
         return context
 

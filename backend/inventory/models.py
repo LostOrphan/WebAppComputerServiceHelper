@@ -40,7 +40,7 @@ class Part(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Automatyczne generowanie unikalnego SKU (np. PRT-000001), jeśli brak
+        # Automatyczne generowanie unikalnego SKU (np. PRT-000001)
         if not self.sku:
             with transaction.atomic():
                 last_id = Part.objects.select_for_update().aggregate(

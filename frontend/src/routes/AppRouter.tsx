@@ -14,7 +14,6 @@ import { BranchPanel } from '../pages/Private/panels/branchPanel';
 import { Employees } from '../pages/Private/company/employees';
 import { Branches } from '../pages/Private/company/branches';
 import { Warehouses } from '../pages/Private/company/warehouses';
-import { Orders } from '../pages/Private/company/orders';
 import { Services } from '../pages/Private/company/services';
 import { About } from '../pages/Public/about';
 import { BranchesList } from '../pages/Public/branchesList';
@@ -47,11 +46,10 @@ export const AppRouter: React.FC = () => {
               <Route path="/work/admin/company/employees" element={<Employees />} />
               <Route path="/work/admin/company/branches" element={<Branches />} />
               <Route path="/work/admin/company/warehouses" element={<Warehouses />} />
-              <Route path="/work/admin/company/orders" element={<Orders />} />
               <Route path="/work/admin/company/services" element={<Services />} />
               <Route path="/work/admin/company/clients" element={<Clients />} />
           </Route>
-          <Route element={<PrivateRoute requiredRoles={[ 'MANAGER']} />}>
+          <Route element={<PrivateRoute requiredRoles={["MANAGER"]} />}>
             <Route path="/work/admin/branch" element={<BranchPanel />} />
             <Route path="/work/admin/branch/employees" element={<Employees branchOnly />} />
             <Route path="/work/admin/branch/warehouse" element={<Warehouses branchOnly />} />

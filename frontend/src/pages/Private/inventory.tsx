@@ -124,15 +124,7 @@ export const Inventory: React.FC = () => {
              Dodaj produkt
           </button>
           
-          {/* <button 
-            onClick={() => {
-              setScannedEan(''); // Ręczne dodanie czyści zapamiętany EAN ze skanera
-              setIsAddModalOpen(true);
-            }}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition whitespace-nowrap font-medium shadow-sm"
-          >
-            + Dodaj część
-          </button> */}
+
         </div>
       </div>
 
@@ -235,7 +227,7 @@ export const Inventory: React.FC = () => {
       <ReceiveGoodsModal
         isOpen={isReceiveModalOpen}
         onClose={() => setIsReceiveModalOpen(false)}
-        onSuccess={() => fetchInventory()} // Automatyczne odświeżenie po dodaniu sztuk!
+        onSuccess={() => fetchInventory()} // Automatyczne odświeżenie po dodaniu sztuk
         onNotFound={handlePartNotFound}
         onAddManually={handleAddPartManually}
       />

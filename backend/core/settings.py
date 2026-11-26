@@ -195,15 +195,15 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),     # Czas ważności tokena dostępu
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),        # Czas ważności tokena odświeżania
-    'ROTATE_REFRESH_TOKENS': True,                      # Generuj nowy Refresh Token przy odświeżaniu
-    'BLACKLIST_AFTER_ROTATION': True,                   # Unieważniaj stary Refresh Token po użyciu
-    'UPDATE_LAST_LOGIN': True,                          # Aktualizuj pole last_login w modelu użytkownika
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True, 
+    'UPDATE_LAST_LOGIN': True,
 
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
-    'AUTH_HEADER_TYPES': ('Bearer',),                    # Nagłówek: Authorization: Bearer <token>
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
 CORS_ALLOWED_ORIGINS = [

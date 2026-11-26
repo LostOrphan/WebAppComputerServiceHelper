@@ -36,7 +36,7 @@ class PartView(viewsets.ModelViewSet):
                 part=part,
                 location=self.request.user.location,
                 quantity=0,
-                min_quantity=2,
+                min_quantity=0,
             )
 
 class StockView(viewsets.ModelViewSet):
@@ -126,7 +126,7 @@ class StockView(viewsets.ModelViewSet):
         stock, created = Stock.objects.get_or_create(
             part=part,
             location=user_location,
-            defaults={'quantity': 0, 'min_quantity': 2}
+            defaults={'quantity': 0, 'min_quantity': 0}
         )
         
         stock.add_quantity(quantity)

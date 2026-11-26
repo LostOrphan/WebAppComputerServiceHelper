@@ -29,14 +29,7 @@ const tiles: ManagementTile[] = [
     path: "/work/admin/company/warehouses",
     color: "bg-amber-50 text-amber-600",
   },
-  // {
-  //   id: 'orders',
-  //   title: 'Zlecenia Serwisowe',
-  //   description: 'Przeglądaj zlecenia serwisowe',
-  //   icon: '',
-  //   path: '/work/admin/company/orders',
-  //   color: 'bg-purple-50 text-purple-600',
-  // },
+
   {
     id: "services",
     title: "Cennik usług",
